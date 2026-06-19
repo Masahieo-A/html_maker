@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callModel, type Provider, type ImagePart, type PdfPart } from "@/lib/aiServer";
+import { streamModel, type Provider, type ImagePart, type PdfPart } from "@/lib/aiServer";
 import { parseLessonDoc } from "@/lib/validate";
 import { SCHEMA_DOC } from "@/lib/prompts";
 
-export const runtime = "nodejs";
-export const maxDuration = 60;
+// Edge Runtime: I/Oアイドル時間はCPU制限に含まれないため、
+// ストリーミングでAI生成が長くても接続が維持される（Vercel無料枠タイムアウト回避）
+export const runtime = "edge";
 
 type Body = {
   provider: Provider;
@@ -23,10 +24,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "不正なリクエストです" }, { status: 400 });
   }
   const { provider, model, text, image, pdf } = body;
-  // キーは「リクエスト(UI入力) → サーバー環境変数」の順で解決（両対応）
   const envKey =
     provider === "gemini" ? process.env.GEMINI_API_KEY : process.env.ANTHROPIC_API_KEY;
   const apiKey = body.apiKey || envKey || "";
+
   if (!apiKey)
     return NextResponse.json(
       { error: "API キーが未設定です（UI または Vercel 環境変数で設定してください）" },
@@ -44,23 +45,53 @@ export async function POST(req: NextRequest) {
       }\n\nPDF の内容を踏まえ、上の指示の中心テーマ・構成・雰囲気に沿って LessonDoc を生成してください。`
     : `# 教師の入力\n${text}\n\nこの内容から LessonDoc を生成してください。`;
 
-  try {
-    let raw = await callModel({ provider, apiKey, model, system: SCHEMA_DOC, user, image, pdf });
-    try {
-      const doc = parseLessonDoc(raw);
-      return NextResponse.json({ doc });
-    } catch (firstErr: any) {
-      // 1回だけ自動リトライ（修正指示付き）
-      const retryUser = `${user}\n\n直前の出力はパースに失敗しました（理由: ${firstErr.message}）。\nスキーマに厳密に従い、JSONオブジェクトのみを返してください。`;
-      raw = await callModel({ provider, apiKey, model, system: SCHEMA_DOC, user: retryUser, image, pdf });
-      const doc = parseLessonDoc(raw);
-      return NextResponse.json({ doc });
-    }
-  } catch (err: any) {
-    console.error("[generate] failed:", err?.message ?? err);
-    return NextResponse.json(
-      { error: err?.message ?? "生成に失敗しました" },
-      { status: 422 }
-    );
-  }
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: object) => {
+        controller.enqueue(encoder.encode("data: " + JSON.stringify(obj) + "\n\n"));
+      };
+
+      try {
+        const aiIter = await streamModel({
+          provider,
+          apiKey,
+          model,
+          system: SCHEMA_DOC,
+          user,
+          image: image ?? null,
+          pdf: pdf ?? null,
+        });
+
+        let fullText = "";
+        let lastReported = 0;
+
+        for await (const chunk of aiIter) {
+          fullText += chunk;
+          // 200文字ごとに進捗通知（頻度を抑えてオーバーヘッド削減）
+          if (fullText.length - lastReported >= 200) {
+            send({ progress: fullText.length });
+            lastReported = fullText.length;
+          }
+        }
+
+        const doc = parseLessonDoc(fullText);
+        send({ done: true, doc });
+      } catch (err: any) {
+        console.error("[generate] failed:", err?.message ?? err);
+        send({ error: err?.message ?? "生成に失敗しました" });
+      }
+
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

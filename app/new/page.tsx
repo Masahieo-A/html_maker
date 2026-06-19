@@ -13,6 +13,7 @@ export default function NewPage() {
   const [pdf, setPdf] = useState<{ data: string } | null>(null);
   const [pdfName, setPdfName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasKey, setHasKey] = useState(true);
@@ -67,6 +68,7 @@ export default function NewPage() {
 
   const generate = async () => {
     setError(null);
+    setProgress(0);
     const ai = loadAiSettings();
     if (!ai.apiKey && !serverHasKey) {
       setShowSettings(true);
@@ -77,38 +79,43 @@ export default function NewPage() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          provider: ai.provider,
-          apiKey: ai.apiKey,
-          model: ai.model,
-          text,
-          image,
-          pdf,
-        }),
+        body: JSON.stringify({ provider: ai.provider, apiKey: ai.apiKey, model: ai.model, text, image, pdf }),
       });
-      // サーバーがJSON以外（プラットフォームのエラーページ等）を返すことがあるので安全にパース
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        if (res.status === 413) {
-          throw new Error(
-            "PDF が大きすぎます（送信データが約4.5MBの上限超過）。該当ページだけのPDFを書き出すか、より小さいPDFでお試しください。"
-          );
-        }
-        if (res.status === 504 || res.status === 408) {
-          throw new Error(
-            "処理が時間切れになりました（PDFが重い可能性）。ページ数の少ないPDFでお試しください。"
-          );
-        }
-        throw new Error(
-          `サーバーエラー(${res.status})。PDFが大きすぎる/重い可能性があります。1ページだけのPDFでお試しください。`
-        );
+
+      // バリデーションエラー等（400系）は JSON で返る
+      if (!res.ok) {
+        const raw = await res.text();
+        let data: any = null;
+        try { data = JSON.parse(raw); } catch { /* noop */ }
+        throw new Error(data?.error ?? `サーバーエラー(${res.status})`);
       }
-      if (!res.ok) throw new Error(data?.error ?? "生成に失敗しました");
-      saveLesson(data.doc);
-      router.push(`/editor/${data.doc.id}`);
+
+      if (!res.body) throw new Error("ストリームが空です");
+
+      // SSE ストリームを読み取り、進捗表示しながら完成ドキュメントを待つ
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let evt: any;
+          try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+          if (evt.progress != null) setProgress(evt.progress);
+          if (evt.error) throw new Error(evt.error);
+          if (evt.done && evt.doc) {
+            saveLesson(evt.doc);
+            router.push(`/editor/${evt.doc.id}`);
+            break outer;
+          }
+        }
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -212,7 +219,8 @@ export default function NewPage() {
         >
           {busy ? (
             <>
-              <span className="spinner" /> 生成中…
+              <span className="spinner" />{" "}
+              {progress > 0 ? `生成中… ${progress.toLocaleString()}文字受信` : "生成中…（まもなく開始）"}
             </>
           ) : (
             "AIで下書き生成"
