@@ -4,6 +4,7 @@ import {
   AiSettings,
   DEFAULT_MODELS,
   ServerKeys,
+  fetchModels,
   fetchServerKeys,
   loadAiSettings,
   saveAiSettings,
@@ -25,13 +26,38 @@ export default function AiSettingsPanel({
     anthropic: false,
     gemini: false,
   });
+  const [models, setModels] = useState<string[]>(DEFAULT_MODELS.anthropic);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   useEffect(() => {
-    setS(loadAiSettings());
+    const init = loadAiSettings();
+    setS(init);
+    setModels(DEFAULT_MODELS[init.provider]);
     fetchServerKeys().then(setServerKeys);
   }, []);
 
   const serverHasForProvider = serverKeys[s.provider];
+
+  // プロバイダ or キーが変わったら、実際に使えるモデル一覧を取得（失敗時は既定値）
+  useEffect(() => {
+    let alive = true;
+    setLoadingModels(true);
+    fetchModels(s.provider, s.apiKey).then((list) => {
+      if (!alive) return;
+      const fallback = DEFAULT_MODELS[s.provider];
+      const final = list.length ? list : fallback;
+      setModels(final);
+      // 現在の選択が一覧に無ければ先頭に寄せる
+      setS((prev) =>
+        final.includes(prev.model) ? prev : { ...prev, model: final[0] }
+      );
+      setLoadingModels(false);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.provider, s.apiKey, serverKeys.anthropic, serverKeys.gemini]);
 
   const update = (patch: Partial<AiSettings>) => {
     const next = { ...s, ...patch };
@@ -81,18 +107,22 @@ export default function AiSettingsPanel({
           </select>
         </div>
         <div className="field">
-          <label>モデル</label>
+          <label>モデル {loadingModels && <span className="hint">（一覧取得中…）</span>}</label>
           <select
             className="select"
             value={s.model}
             onChange={(e) => update({ model: e.target.value })}
           >
-            {DEFAULT_MODELS[s.provider].map((m) => (
+            {/* 保存済みの選択が一覧に無くても表示できるよう補完 */}
+            {(models.includes(s.model) ? models : [s.model, ...models]).map((m) => (
               <option key={m} value={m}>
                 {m}
               </option>
             ))}
           </select>
+          <p className="hint" style={{ marginTop: 4 }}>
+            キーを入力（またはサーバー設定）すると、実際に使えるモデルを自動取得します。
+          </p>
         </div>
         <div className="field">
           <label>API キー{serverHasForProvider ? "（任意）" : ""}</label>

@@ -77,9 +77,10 @@ export type AiSettings = {
 
 const AI_KEY = "viewpoint:ai";
 
+// 動的取得に失敗したときのフォールバック既定値（実際の一覧は /api/models で取得）
 export const DEFAULT_MODELS = {
   anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
-  gemini: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+  gemini: ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"],
 };
 
 export function loadAiSettings(): AiSettings {
@@ -109,4 +110,25 @@ export async function fetchServerKeys(): Promise<ServerKeys> {
     /* noop */
   }
   return { anthropic: false, gemini: false };
+}
+
+/** プロバイダで実際に使えるモデル一覧をキーで取得（失敗時は空配列）。 */
+export async function fetchModels(
+  provider: AiSettings["provider"],
+  apiKey: string
+): Promise<string[]> {
+  try {
+    const r = await fetch("/api/models", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider, apiKey }),
+    });
+    if (r.ok) {
+      const data = (await r.json()) as { models?: string[] };
+      return data.models ?? [];
+    }
+  } catch {
+    /* noop */
+  }
+  return [];
 }
