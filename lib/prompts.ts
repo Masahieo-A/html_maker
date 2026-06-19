@@ -15,8 +15,7 @@ type Block =
   | { id:string; type:"sentence"; tokens:{ id:string; text:string; role:string|null }[] }
   | { id:string; type:"tree"; root:string; branches:Branch[] }
   | { id:string; type:"note"; label:string; body:string; variant?:"point"|"tip"|"warning" }
-  | { id:string; type:"image"; src:string; alt:string }
-  | { id:string; type:"raw"; html:string };
+  | { id:string; type:"image"; src:string; alt:string };
 type Branch = { id:string; role:string; value:string; children?:Branch[] };
 
 ルール:
@@ -25,6 +24,8 @@ type Branch = { id:string; role:string; value:string; children?:Branch[] };
 - "sentence" は英文を1語ずつ token に分解し、文法的な働きで role を割り当てる（働きのない語は role:null）。
 - "tree" は文の構造（係り受け・主部/動詞/目的語など）を表す。線や座標は出力しない（構造だけ）。多層なら children で入れ子にする。
 - "note" で着眼点・ヒント・注意を添える。
+- 初回生成では type:"raw" を使わない。HTML断片をJSON文字列に入れない。
+- JSON文字列内の引用符・改行・バックスラッシュは必ずJSONとして正しくエスケープする。
 - 教師の意図を尊重しつつ、生徒が視覚的に理解できる構成にする。
 - 日本語の解説は自然な日本語で書く。
 出力: LessonDoc の JSON オブジェクトのみ。`;

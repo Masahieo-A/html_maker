@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { streamModel, type Provider, type ImagePart, type PdfPart } from "@/lib/aiServer";
+import {
+  callModel,
+  streamModel,
+  type Provider,
+  type ImagePart,
+  type PdfPart,
+} from "@/lib/aiServer";
 import { parseLessonDoc } from "@/lib/validate";
 import { SCHEMA_DOC } from "@/lib/prompts";
 
@@ -76,7 +82,25 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        const doc = parseLessonDoc(fullText);
+        let doc;
+        try {
+          doc = parseLessonDoc(fullText);
+        } catch (firstErr: any) {
+          send({ progress: fullText.length, retrying: true });
+          const retryUser = `${user}\n\n直前の出力はJSONパースに失敗しました（理由: ${
+            firstErr?.message ?? "不明"
+          }）。LessonDocのJSONオブジェクトのみを返してください。Markdown、説明文、コードフェンス、type:"raw"、HTML断片は禁止です。JSON文字列内の引用符・改行・バックスラッシュは必ず正しくエスケープしてください。`;
+          const retryText = await callModel({
+            provider,
+            apiKey,
+            model,
+            system: SCHEMA_DOC,
+            user: retryUser,
+            image: image ?? null,
+            pdf: pdf ?? null,
+          });
+          doc = parseLessonDoc(retryText);
+        }
         send({ done: true, doc });
       } catch (err: any) {
         console.error("[generate] failed:", err?.message ?? err);

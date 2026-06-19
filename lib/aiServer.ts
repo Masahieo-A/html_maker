@@ -54,7 +54,11 @@ async function callGemini({ apiKey, model, system, user, image, pdf }: CallInput
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0.4, maxOutputTokens: 8000 } }),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 8000, responseMimeType: "application/json" },
+    }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error(`Gemini API ${res.status}: ${t.slice(0, 400)}`); }
   const data = await res.json();
@@ -122,7 +126,11 @@ async function* streamGemini({ apiKey, model, system, user, image, pdf }: CallIn
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0.4, maxOutputTokens: 8000 } }),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 8000, responseMimeType: "application/json" },
+    }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error(`Gemini API ${res.status}: ${t.slice(0, 400)}`); }
 
