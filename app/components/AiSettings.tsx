@@ -3,6 +3,8 @@ import React, { useEffect, useState } from "react";
 import {
   AiSettings,
   DEFAULT_MODELS,
+  ServerKeys,
+  fetchServerKeys,
   loadAiSettings,
   saveAiSettings,
 } from "@/lib/storage";
@@ -19,9 +21,17 @@ export default function AiSettingsPanel({
     model: DEFAULT_MODELS.anthropic[0],
   });
 
+  const [serverKeys, setServerKeys] = useState<ServerKeys>({
+    anthropic: false,
+    gemini: false,
+  });
+
   useEffect(() => {
     setS(loadAiSettings());
+    fetchServerKeys().then(setServerKeys);
   }, []);
+
+  const serverHasForProvider = serverKeys[s.provider];
 
   const update = (patch: Partial<AiSettings>) => {
     const next = { ...s, ...patch };
@@ -85,14 +95,25 @@ export default function AiSettingsPanel({
           </select>
         </div>
         <div className="field">
-          <label>API キー</label>
+          <label>API キー{serverHasForProvider ? "（任意）" : ""}</label>
           <input
             className="input"
             type="password"
-            placeholder={s.provider === "anthropic" ? "sk-ant-..." : "AIza..."}
+            placeholder={
+              serverHasForProvider
+                ? "サーバー側に設定済み（空欄でOK）"
+                : s.provider === "anthropic"
+                ? "sk-ant-..."
+                : "AIza..."
+            }
             value={s.apiKey}
             onChange={(e) => update({ apiKey: e.target.value })}
           />
+          {serverHasForProvider && (
+            <p className="hint" style={{ marginTop: 4 }}>
+              ✓ サーバー（Vercel 環境変数）にこのプロバイダのキーが設定済みです。ここは空欄のままで生成・編集できます。
+            </p>
+          )}
         </div>
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 8 }}>
           <button className="btn" onClick={onClose}>

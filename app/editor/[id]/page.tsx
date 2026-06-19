@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Block, LessonDoc, Selection } from "@/lib/types";
 import { BLOCK_TYPE_LABELS } from "@/lib/types";
-import { loadAiSettings, loadLesson, saveLesson } from "@/lib/storage";
+import { loadAiSettings, fetchServerKeys, loadLesson, saveLesson } from "@/lib/storage";
 import { addBlock, makeEmptyBlock, replaceBlock, findBlock } from "@/lib/docOps";
 import { parseLessonDoc } from "@/lib/validate";
 import { exportHtml } from "@/lib/exportHtml";
@@ -35,6 +35,11 @@ export default function EditorPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [jsonDraft, setJsonDraft] = useState("");
+  const [serverHasKey, setServerHasKey] = useState(false);
+
+  useEffect(() => {
+    fetchServerKeys().then((sk) => setServerHasKey(sk.anthropic || sk.gemini));
+  }, []);
 
   // 読み込み
   useEffect(() => {
@@ -84,7 +89,7 @@ export default function EditorPage() {
     const block = findBlock(doc, selection.blockId);
     if (!block) return;
     const ai = loadAiSettings();
-    if (!ai.apiKey) {
+    if (!ai.apiKey && !serverHasKey) {
       setShowSettings(true);
       return;
     }

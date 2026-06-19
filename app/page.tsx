@@ -8,6 +8,7 @@ import {
   duplicateLesson,
   listLessons,
   loadAiSettings,
+  fetchServerKeys,
   saveLesson,
 } from "@/lib/storage";
 import { makeSampleDoc } from "@/lib/sample";
@@ -20,11 +21,16 @@ export default function HomePage() {
   const [lessons, setLessons] = useState<LessonMeta[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [hasKey, setHasKey] = useState(true);
+  const [serverHasKey, setServerHasKey] = useState(false);
 
   const refresh = () => setLessons(listLessons());
   useEffect(() => {
     refresh();
-    setHasKey(!!loadAiSettings().apiKey);
+    fetchServerKeys().then((sk) => {
+      const server = sk.anthropic || sk.gemini;
+      setServerHasKey(server);
+      setHasKey(!!loadAiSettings().apiKey || server);
+    });
   }, []);
 
   const createBlank = () => {
@@ -129,7 +135,7 @@ export default function HomePage() {
         <AiSettingsPanel
           onClose={() => {
             setShowSettings(false);
-            setHasKey(!!loadAiSettings().apiKey);
+            setHasKey(!!loadAiSettings().apiKey || serverHasKey);
           }}
         />
       )}

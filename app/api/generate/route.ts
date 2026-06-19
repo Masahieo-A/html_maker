@@ -21,8 +21,16 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "不正なリクエストです" }, { status: 400 });
   }
-  const { provider, apiKey, model, text, image } = body;
-  if (!apiKey) return NextResponse.json({ error: "API キーが未設定です" }, { status: 400 });
+  const { provider, model, text, image } = body;
+  // キーは「リクエスト(UI入力) → サーバー環境変数」の順で解決（両対応）
+  const envKey =
+    provider === "gemini" ? process.env.GEMINI_API_KEY : process.env.ANTHROPIC_API_KEY;
+  const apiKey = body.apiKey || envKey || "";
+  if (!apiKey)
+    return NextResponse.json(
+      { error: "API キーが未設定です（UI または Vercel 環境変数で設定してください）" },
+      { status: 400 }
+    );
   if (!text?.trim()) return NextResponse.json({ error: "本文が空です" }, { status: 400 });
 
   const user = `# 教師の入力\n${text}\n\nこの内容から LessonDoc を生成してください。`;

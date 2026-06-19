@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { loadAiSettings, saveLesson } from "@/lib/storage";
+import { loadAiSettings, fetchServerKeys, saveLesson } from "@/lib/storage";
 import AiSettingsPanel from "../components/AiSettings";
 
 export default function NewPage() {
@@ -14,8 +14,15 @@ export default function NewPage() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasKey, setHasKey] = useState(true);
+  const [serverHasKey, setServerHasKey] = useState(false);
 
-  useEffect(() => setHasKey(!!loadAiSettings().apiKey), []);
+  useEffect(() => {
+    fetchServerKeys().then((sk) => {
+      const server = sk.anthropic || sk.gemini;
+      setServerHasKey(server);
+      setHasKey(!!loadAiSettings().apiKey || server);
+    });
+  }, []);
 
   const onFile = (file: File) => {
     const reader = new FileReader();
@@ -31,7 +38,7 @@ export default function NewPage() {
   const generate = async () => {
     setError(null);
     const ai = loadAiSettings();
-    if (!ai.apiKey) {
+    if (!ai.apiKey && !serverHasKey) {
       setShowSettings(true);
       return;
     }
@@ -142,7 +149,7 @@ export default function NewPage() {
         <AiSettingsPanel
           onClose={() => {
             setShowSettings(false);
-            setHasKey(!!loadAiSettings().apiKey);
+            setHasKey(!!loadAiSettings().apiKey || serverHasKey);
           }}
         />
       )}

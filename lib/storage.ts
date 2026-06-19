@@ -97,3 +97,16 @@ export function loadAiSettings(): AiSettings {
 export function saveAiSettings(s: AiSettings): void {
   localStorage.setItem(AI_KEY, JSON.stringify(s));
 }
+
+export type ServerKeys = { anthropic: boolean; gemini: boolean };
+
+/** サーバー(Vercel環境変数)にキーがあるか問い合わせる。値は返さず真偽のみ。 */
+export async function fetchServerKeys(): Promise<ServerKeys> {
+  try {
+    const r = await fetch("/api/config");
+    if (r.ok) return (await r.json()) as ServerKeys;
+  } catch {
+    /* noop */
+  }
+  return { anthropic: false, gemini: false };
+}

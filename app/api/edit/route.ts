@@ -22,8 +22,15 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "不正なリクエストです" }, { status: 400 });
   }
-  const { provider, apiKey, model, block, palette, instruction } = body;
-  if (!apiKey) return NextResponse.json({ error: "API キーが未設定です" }, { status: 400 });
+  const { provider, model, block, palette, instruction } = body;
+  const envKey =
+    provider === "gemini" ? process.env.GEMINI_API_KEY : process.env.ANTHROPIC_API_KEY;
+  const apiKey = body.apiKey || envKey || "";
+  if (!apiKey)
+    return NextResponse.json(
+      { error: "API キーが未設定です（UI または Vercel 環境変数で設定してください）" },
+      { status: 400 }
+    );
   if (!instruction?.trim())
     return NextResponse.json({ error: "指示が空です" }, { status: 400 });
 
