@@ -10,6 +10,8 @@ export default function NewPage() {
   const [text, setText] = useState("");
   const [image, setImage] = useState<{ mediaType: string; data: string } | null>(null);
   const [imgPreview, setImgPreview] = useState<string | null>(null);
+  const [pdf, setPdf] = useState<{ data: string } | null>(null);
+  const [pdfName, setPdfName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -35,6 +37,22 @@ export default function NewPage() {
     reader.readAsDataURL(file);
   };
 
+  const onPdf = (file: File) => {
+    setError(null);
+    // 過大なPDFはAPIのリクエスト上限に当たりやすいので軽くガード
+    if (file.size > 25 * 1024 * 1024) {
+      setError("PDF が大きすぎます（25MB以下にしてください）");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(",")[1] ?? "";
+      setPdf({ data: base64 });
+      setPdfName(file.name);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const generate = async () => {
     setError(null);
     const ai = loadAiSettings();
@@ -53,6 +71,7 @@ export default function NewPage() {
           model: ai.model,
           text,
           image,
+          pdf,
         }),
       });
       const data = await res.json();
@@ -84,8 +103,8 @@ export default function NewPage() {
         </Link>
         <h1 style={{ margin: "8px 0 4px" }}>AI で下書き生成</h1>
         <p className="muted" style={{ marginTop: 0 }}>
-          本文・着眼点などのテキストを入力（任意で手書きスケッチの写真も）。AI が LessonDoc
-          の下書きを作り、そこから細部を編集します。
+          ① 解説したい PDF をアップロード → ② 中心テーマ・フォーマット・雰囲気を入力 →
+          AI が PDF を読み取って LessonDoc の下書きを作り、そこから細部を編集します。
         </p>
 
         {!hasKey && (
@@ -95,12 +114,37 @@ export default function NewPage() {
         )}
 
         <div className="field" style={{ marginTop: 16 }}>
-          <label>教材にしたい本文・指示</label>
+          <label>① 解説したい PDF（推奨・最大25MB）</label>
+          <input
+            className="input"
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => e.target.files?.[0] && onPdf(e.target.files[0])}
+          />
+          {pdfName && (
+            <p className="hint" style={{ marginTop: 4 }}>
+              📄 {pdfName} を読み込みました
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ marginLeft: 8 }}
+                onClick={() => {
+                  setPdf(null);
+                  setPdfName(null);
+                }}
+              >
+                クリア
+              </button>
+            </p>
+          )}
+        </div>
+
+        <div className="field">
+          <label>② 中心テーマ・フォーマット・雰囲気の指示</label>
           <textarea
             className="textarea"
-            style={{ minHeight: 180 }}
+            style={{ minHeight: 160 }}
             placeholder={
-              "例: 次の英文を樹形図と色分けで解説したい。\nDesire and determination exceed talent.\n着眼点: and が主語の名詞2つをつないでいること。"
+              "例:\n・中心テーマ: 関係代名詞 which の非制限用法を見抜く\n・フォーマット: 各文を樹形図＋色分け、要所に着眼点ノート\n・雰囲気: 高校生向けにやさしく、専門用語は最小限\n（PDFがあれば、その内容に沿って上記方針で教材化）"
             }
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -108,7 +152,7 @@ export default function NewPage() {
         </div>
 
         <div className="field">
-          <label>スケッチ写真（任意・補完用）</label>
+          <label>③ 手書きスケッチ写真（任意・補完用）</label>
           <input
             className="input"
             type="file"
@@ -132,7 +176,7 @@ export default function NewPage() {
         <button
           className="btn btn--primary"
           style={{ marginTop: 8 }}
-          disabled={busy || !text.trim()}
+          disabled={busy || (!text.trim() && !pdf)}
           onClick={generate}
         >
           {busy ? (

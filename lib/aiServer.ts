@@ -7,6 +7,7 @@
 export type Provider = "anthropic" | "gemini";
 
 export type ImagePart = { mediaType: string; data: string }; // data は base64（接頭辞なし）
+export type PdfPart = { data: string }; // application/pdf の base64（接頭辞なし）
 
 export type CallInput = {
   provider: Provider;
@@ -15,6 +16,7 @@ export type CallInput = {
   system: string;
   user: string;
   image?: ImagePart | null;
+  pdf?: PdfPart | null;
 };
 
 export async function callModel(input: CallInput): Promise<string> {
@@ -28,8 +30,15 @@ async function callAnthropic({
   system,
   user,
   image,
+  pdf,
 }: CallInput): Promise<string> {
   const content: any[] = [];
+  if (pdf) {
+    content.push({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: pdf.data },
+    });
+  }
   if (image) {
     content.push({
       type: "image",
@@ -72,11 +81,16 @@ async function callGemini({
   system,
   user,
   image,
+  pdf,
 }: CallInput): Promise<string> {
-  const parts: any[] = [{ text: user }];
+  const parts: any[] = [];
+  if (pdf) {
+    parts.push({ inline_data: { mime_type: "application/pdf", data: pdf.data } });
+  }
   if (image) {
     parts.push({ inline_data: { mime_type: image.mediaType, data: image.data } });
   }
+  parts.push({ text: user });
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
