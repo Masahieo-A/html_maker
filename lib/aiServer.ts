@@ -29,7 +29,7 @@ export async function callModel(input: CallInput): Promise<string> {
 async function fetchWithTimeout(
   url: string,
   opts: RequestInit,
-  ms = 55000
+  ms = 45000
 ): Promise<Response> {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
@@ -38,7 +38,7 @@ async function fetchWithTimeout(
   } catch (e: any) {
     if (e?.name === "AbortError") {
       throw new Error(
-        "モデルの応答が時間切れになりました（約55秒）。より高速なモデル（gemini-2.5-flash / claude-haiku など）に切り替えるか、指示やPDFを短くしてお試しください。"
+        "モデルの応答が時間切れになりました（約45秒・無料枠の上限）。⚙AI設定で高速モデル（gemini-2.5-flash / claude-haiku-4-5）に切り替えるか、対象範囲を1〜2文に絞ってお試しください。"
       );
     }
     throw e;

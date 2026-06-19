@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ doc });
     }
   } catch (err: any) {
+    console.error("[generate] failed:", err?.message ?? err);
     return NextResponse.json(
       { error: err?.message ?? "生成に失敗しました" },
       { status: 422 }
