@@ -46,9 +46,14 @@ export default function NewPage() {
       );
       return;
     }
-    // 過大なPDFはAPIのリクエスト上限に当たりやすいので軽くガード
-    if (file.size > 25 * 1024 * 1024) {
-      setError("PDF が大きすぎます（25MB以下にしてください）");
+    // Vercel のリクエスト上限は約4.5MB。base64化で約1.37倍に膨らむため、
+    // 元PDFは約3MB以下に抑える必要がある。
+    if (file.size > 3.2 * 1024 * 1024) {
+      setError(
+        `PDF が大きすぎます（${(file.size / 1024 / 1024).toFixed(
+          1
+        )}MB）。サーバー上限の都合で約3MB以下が必要です。解説したいページだけを別PDFに書き出してアップロードしてください（例: プレビュー.app → 該当ページを選んで「PDFとして書き出す」）。`
+      );
       return;
     }
     const reader = new FileReader();
@@ -81,8 +86,27 @@ export default function NewPage() {
           pdf,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "生成に失敗しました");
+      // サーバーがJSON以外（プラットフォームのエラーページ等）を返すことがあるので安全にパース
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        if (res.status === 413) {
+          throw new Error(
+            "PDF が大きすぎます（送信データが約4.5MBの上限超過）。該当ページだけのPDFを書き出すか、より小さいPDFでお試しください。"
+          );
+        }
+        if (res.status === 504 || res.status === 408) {
+          throw new Error(
+            "処理が時間切れになりました（PDFが重い可能性）。ページ数の少ないPDFでお試しください。"
+          );
+        }
+        throw new Error(
+          `サーバーエラー(${res.status})。PDFが大きすぎる/重い可能性があります。1ページだけのPDFでお試しください。`
+        );
+      }
+      if (!res.ok) throw new Error(data?.error ?? "生成に失敗しました");
       saveLesson(data.doc);
       router.push(`/editor/${data.doc.id}`);
     } catch (e: any) {
@@ -121,7 +145,7 @@ export default function NewPage() {
         )}
 
         <div className="field" style={{ marginTop: 16 }}>
-          <label>① 解説したい PDF（推奨・最大25MB）</label>
+          <label>① 解説したい PDF（約3MB以下。大きい場合は該当ページだけ書き出し）</label>
           <input
             className="input"
             type="file"
