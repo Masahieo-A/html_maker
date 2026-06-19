@@ -39,6 +39,13 @@ export default function NewPage() {
 
   const onPdf = (file: File) => {
     setError(null);
+    // Google Drive等の「オンラインのみ」ファイルは実体が無く0バイトになりやすい
+    if (file.size === 0) {
+      setError(
+        "ファイルの中身が読めません。Google Drive 等のオンラインのみファイルは、先に Finder でダウンロード（オフライン利用可に）してから選んでください。"
+      );
+      return;
+    }
     // 過大なPDFはAPIのリクエスト上限に当たりやすいので軽くガード
     if (file.size > 25 * 1024 * 1024) {
       setError("PDF が大きすぎます（25MB以下にしてください）");
@@ -118,7 +125,7 @@ export default function NewPage() {
           <input
             className="input"
             type="file"
-            accept="application/pdf"
+            accept="application/pdf,.pdf"
             onChange={(e) => e.target.files?.[0] && onPdf(e.target.files[0])}
           />
           {pdfName && (
