@@ -24,6 +24,29 @@ export async function callModel(input: CallInput): Promise<string> {
   return callGemini(input);
 }
 
+// Vercel無料枠の関数上限(60秒)より前にこちらで打ち切り、平文の504ではなく
+// 分かりやすいエラーを投げる。
+async function fetchWithTimeout(
+  url: string,
+  opts: RequestInit,
+  ms = 55000
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error(
+        "モデルの応答が時間切れになりました（約55秒）。より高速なモデル（gemini-2.5-flash / claude-haiku など）に切り替えるか、指示やPDFを短くしてお試しください。"
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function callAnthropic({
   apiKey,
   model,
@@ -47,7 +70,7 @@ async function callAnthropic({
   }
   content.push({ type: "text", text: user });
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -95,7 +118,7 @@ async function callGemini({
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
