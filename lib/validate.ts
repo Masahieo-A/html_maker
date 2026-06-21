@@ -22,6 +22,74 @@ function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
 
+function joinTextParts(parts: unknown[]): string {
+  return parts
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object") {
+        const raw = part as any;
+        return asString(raw.text) || asString(raw.body) || asString(raw.value) || asString(raw.content);
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function summarizeUnknown(raw: any): string {
+  if (!raw || typeof raw !== "object") return asString(raw);
+  const parts = [
+    asString(raw.text),
+    asString(raw.body),
+    asString(raw.content),
+    asString(raw.description),
+    asString(raw.explanation),
+    asString(raw.summary),
+    Array.isArray(raw.items) ? joinTextParts(raw.items) : "",
+    Array.isArray(raw.children) ? joinTextParts(raw.children) : "",
+  ].filter(Boolean);
+  if (parts.length) return parts.join("\n");
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeBlockType(raw: any): string {
+  const type = asString(raw?.type).replace(/[-_\s]/g, "").toLowerCase();
+  if (["h", "h1", "h2", "h3", "heading", "title", "subtitle"].includes(type)) return "heading";
+  if (["p", "paragraph", "text", "body", "content"].includes(type)) return "paragraph";
+  if (["sentence", "tokens", "tokenizedsentence"].includes(type)) return "sentence";
+  if (["tree", "map", "conceptmap", "structure", "flow", "diagram"].includes(type)) return "tree";
+  if (
+    [
+      "analysiscard",
+      "analysis",
+      "card",
+      "case",
+      "casecard",
+      "example",
+      "spotlight",
+      "worksheet",
+      "question",
+      "exercise",
+      "pointcard",
+      "section",
+    ].includes(type)
+  )
+    return "analysisCard";
+  if (["table", "matrix", "comparison", "comparisonTable".toLowerCase()].includes(type)) return "table";
+  if (["note", "tip", "warning", "hint", "callout"].includes(type)) return "note";
+  if (["image", "figure", "fig"].includes(type)) return "image";
+  if (["raw", "html"].includes(type)) return "raw";
+  if (Array.isArray(raw?.columns) || Array.isArray(raw?.rows)) return "table";
+  if (Array.isArray(raw?.items) || raw?.quote || raw?.source || raw?.takeaway) return "analysisCard";
+  if (raw?.level || raw?.title) return "heading";
+  if (raw?.text || raw?.body || raw?.content) return "paragraph";
+  return type;
+}
+
 /** AI が ```json フェンスや前置きを付けてきても本体を取り出す */
 export function extractJson(text: string): string {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -45,17 +113,17 @@ function coerceBranch(raw: any): Branch {
 }
 
 function coerceBlock(raw: any): Block | null {
-  const type = raw?.type;
+  const type = normalizeBlockType(raw);
   if (!VALID_TYPES.has(type)) return null;
   const id = asString(raw?.id) || uid("b");
   switch (type) {
     case "heading": {
       const lvl = Number(raw?.level);
       const level = (lvl === 1 || lvl === 2 || lvl === 3 ? lvl : 2) as 1 | 2 | 3;
-      return { id, type, level, text: asString(raw?.text) };
+      return { id, type, level, text: asString(raw?.text) || asString(raw?.title) };
     }
     case "paragraph":
-      return { id, type, text: asString(raw?.text) };
+      return { id, type, text: asString(raw?.text) || asString(raw?.body) || asString(raw?.content) };
     case "sentence": {
       const tokens: Token[] = Array.isArray(raw?.tokens)
         ? raw.tokens.map((t: any) => ({
@@ -77,18 +145,28 @@ function coerceBlock(raw: any): Block | null {
         ? raw.items.map((item: any) => ({
             id: asString(item?.id) || uid("item"),
             label: asString(item?.label, "項目"),
-            value: asString(item?.value),
+            value: asString(item?.value) || asString(item?.text) || asString(item?.body) || asString(item?.content),
             role: item?.role == null ? null : asString(item.role),
           }))
         : [];
+      const fallbackItems = items.length
+        ? items
+        : [
+            {
+              id: uid("item"),
+              label: "内容",
+              value: summarizeUnknown(raw),
+              role: null,
+            },
+          ];
       return {
         id,
         type,
-        title: asString(raw?.title, "分析"),
+        title: asString(raw?.title) || asString(raw?.heading) || asString(raw?.label, "分析"),
         tag: raw?.tag == null ? undefined : asString(raw.tag),
         source: raw?.source == null ? undefined : asString(raw.source),
         quote: raw?.quote == null ? undefined : asString(raw.quote),
-        items,
+        items: fallbackItems,
         takeaway: raw?.takeaway == null ? undefined : asString(raw.takeaway),
       };
     }
@@ -109,7 +187,7 @@ function coerceBlock(raw: any): Block | null {
         type,
         title: raw?.title == null ? undefined : asString(raw.title),
         columns: columns.length ? columns : ["項目", "内容"],
-        rows,
+        rows: rows.length ? rows : [["内容", summarizeUnknown(raw)]],
       };
     }
     case "note": {
@@ -180,9 +258,32 @@ function ensureRoles(doc: LessonDoc): LessonDoc {
 export function parseLessonDoc(jsonText: string, keepId?: string): LessonDoc {
   const obj = JSON.parse(extractJson(jsonText));
   if (!obj || typeof obj !== "object") throw new Error("ルートがオブジェクトではありません");
-  const blocksRaw = Array.isArray(obj.blocks) ? obj.blocks : [];
-  const blocks = blocksRaw.map(coerceBlock).filter((b: Block | null): b is Block => b !== null);
-  if (blocks.length === 0) throw new Error("有効なブロックが 1 つもありません");
+  const blocksRaw = Array.isArray(obj.blocks)
+    ? obj.blocks
+    : Array.isArray(obj.sections)
+      ? obj.sections
+      : Array.isArray(obj.cards)
+        ? obj.cards
+        : Array.isArray(obj.content)
+          ? obj.content
+          : Array.isArray(obj.items)
+            ? obj.items
+            : [];
+  let blocks = blocksRaw.map(coerceBlock).filter((b: Block | null): b is Block => b !== null);
+  if (blocks.length === 0) {
+    const fallbackText =
+      summarizeUnknown(obj) ||
+      `AIの出力を教材ブロックとして解釈できませんでした。出力形式を調整して再生成してください。`;
+    blocks = [
+      {
+        id: uid("b"),
+        type: "note",
+        label: "生成結果の確認が必要です",
+        body: fallbackText.slice(0, 4000),
+        variant: "warning",
+      },
+    ];
+  }
 
   let doc: LessonDoc = {
     id: keepId || asString(obj.id) || uid("lesson"),

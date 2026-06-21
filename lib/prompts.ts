@@ -31,6 +31,7 @@ type AnalysisItem = { id:string; label:string; value:string; role?:string|null }
 - "tree" は階層構造（英文構造、因果関係、分類、論理展開、手順など）を表す。線や座標は出力しない（構造だけ）。多層なら children で入れ子にする。
 - "note" で着眼点・ヒント・注意を添える。
 - 初回生成では type:"raw" を使わない。HTML断片をJSON文字列に入れない。
+- section, card, example, spotlight, analysis, worksheet, question など独自の block type は使わない。必要なら analysisCard または table に変換する。
 - JSON文字列内の引用符・改行・バックスラッシュは必ずJSONとして正しくエスケープする。
 - 教師の意図を尊重しつつ、生徒が視覚的に理解できる構成にする。
 - PDFや長文を扱う場合は、まず教師の中心テーマに関係する箇所を複数抽出し、必要に応じて analysisCard と table で「本文引用・何を見ればよいか・なぜそう判断できるか・それで何が分かるか」を整理する。
