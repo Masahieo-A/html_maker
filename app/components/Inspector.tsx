@@ -5,12 +5,14 @@
 // ============================================================================
 import React, { useState } from "react";
 import type {
+  AnalysisCardBlock,
   Block,
   Branch,
   LessonDoc,
   NoteBlock,
   Selection,
   SentenceBlock,
+  TableBlock,
   TreeBlock,
 } from "@/lib/types";
 import {
@@ -230,6 +232,14 @@ export default function Inspector({
         </>
       )}
 
+      {selection.kind === "block" && block.type === "analysisCard" && (
+        <AnalysisCardEditor doc={doc} block={block} onChange={onChange} />
+      )}
+
+      {selection.kind === "block" && block.type === "table" && (
+        <TableEditor doc={doc} block={block} onChange={onChange} />
+      )}
+
       {selection.kind === "block" && block.type === "sentence" && (
         <SentenceEditor
           doc={doc}
@@ -313,6 +323,120 @@ function BlockToolbar({
         削除
       </button>
     </div>
+  );
+}
+
+function AnalysisCardEditor({
+  doc,
+  block,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: AnalysisCardBlock;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const [itemsText, setItemsText] = useState(JSON.stringify(block.items, null, 2));
+  const [itemsError, setItemsError] = useState<string | null>(null);
+  const patch = (p: Partial<AnalysisCardBlock>) =>
+    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as any), ...p })));
+  return (
+    <>
+      <span className="insp__chip">分析カード</span>
+      <div className="field">
+        <label>タグ</label>
+        <input className="input" value={block.tag ?? ""} onChange={(e) => patch({ tag: e.target.value || undefined })} />
+      </div>
+      <div className="field">
+        <label>タイトル</label>
+        <input className="input" value={block.title} onChange={(e) => patch({ title: e.target.value })} />
+      </div>
+      <div className="field">
+        <label>出典・位置</label>
+        <input className="input" value={block.source ?? ""} onChange={(e) => patch({ source: e.target.value || undefined })} />
+      </div>
+      <div className="field">
+        <label>引用・対象</label>
+        <textarea className="textarea" value={block.quote ?? ""} onChange={(e) => patch({ quote: e.target.value || undefined })} />
+      </div>
+      <div className="field">
+        <label>項目 JSON</label>
+        <textarea
+          className="textarea"
+          style={{ minHeight: 150, fontFamily: "monospace", fontSize: 12.5 }}
+          value={itemsText}
+          onChange={(e) => {
+            const next = e.target.value;
+            setItemsText(next);
+            try {
+              const parsed = JSON.parse(next);
+              if (!Array.isArray(parsed)) throw new Error("配列ではありません");
+              patch({ items: parsed });
+              setItemsError(null);
+            } catch (err: any) {
+              setItemsError(err?.message ?? "JSONとして解釈できません");
+            }
+          }}
+        />
+        {itemsError && <p className="hint" style={{ color: "var(--danger)" }}>{itemsError}</p>}
+      </div>
+      <div className="field">
+        <label>まとめ</label>
+        <textarea className="textarea" value={block.takeaway ?? ""} onChange={(e) => patch({ takeaway: e.target.value || undefined })} />
+      </div>
+    </>
+  );
+}
+
+function TableEditor({
+  doc,
+  block,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: TableBlock;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const [rowsText, setRowsText] = useState(JSON.stringify(block.rows, null, 2));
+  const [rowsError, setRowsError] = useState<string | null>(null);
+  const patch = (p: Partial<TableBlock>) =>
+    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as any), ...p })));
+  return (
+    <>
+      <span className="insp__chip">表</span>
+      <div className="field">
+        <label>タイトル</label>
+        <input className="input" value={block.title ?? ""} onChange={(e) => patch({ title: e.target.value || undefined })} />
+      </div>
+      <div className="field">
+        <label>列名（1行に1列）</label>
+        <textarea
+          className="textarea"
+          value={block.columns.join("\n")}
+          onChange={(e) => patch({ columns: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
+        />
+      </div>
+      <div className="field">
+        <label>行 JSON</label>
+        <textarea
+          className="textarea"
+          style={{ minHeight: 150, fontFamily: "monospace", fontSize: 12.5 }}
+          value={rowsText}
+          onChange={(e) => {
+            const next = e.target.value;
+            setRowsText(next);
+            try {
+              const parsed = JSON.parse(next);
+              if (!Array.isArray(parsed)) throw new Error("配列ではありません");
+              patch({ rows: parsed });
+              setRowsError(null);
+            } catch (err: any) {
+              setRowsError(err?.message ?? "JSONとして解釈できません");
+            }
+          }}
+        />
+        {rowsError && <p className="hint" style={{ color: "var(--danger)" }}>{rowsError}</p>}
+      </div>
+    </>
   );
 }
 

@@ -206,6 +206,69 @@ function BlockView({
         </div>
       );
     }
+    case "analysisCard":
+      return (
+        <section
+          className={`r-analysis node ${blockSelected ? "node--selected" : ""}`}
+          onClick={selectBlock}
+        >
+          <div className="r-analysis__head">
+            {block.tag && <span className="r-analysis__tag">{block.tag}</span>}
+            <h3>{block.title}</h3>
+          </div>
+          {block.source && <div className="r-analysis__source">{block.source}</div>}
+          {block.quote && <blockquote className="r-analysis__quote">{block.quote}</blockquote>}
+          <dl className="r-analysis__items">
+            {block.items.map((item) => {
+              const role = item.role ? doc.rolePalette[item.role] : null;
+              return (
+                <div className="r-analysis__item" key={item.id}>
+                  <dt>
+                    {role && (
+                      <span
+                        className="r-analysis__swatch"
+                        style={{ background: role.bg, borderColor: role.color }}
+                      />
+                    )}
+                    {item.label}
+                  </dt>
+                  <dd>{item.value}</dd>
+                </div>
+              );
+            })}
+          </dl>
+          {block.takeaway && <div className="r-analysis__takeaway">{block.takeaway}</div>}
+        </section>
+      );
+    case "table":
+      return (
+        <section
+          className={`r-table-wrap node ${blockSelected ? "node--selected" : ""}`}
+          onClick={selectBlock}
+        >
+          {block.title && <h3 className="r-table-title">{block.title}</h3>}
+          <div className="r-table-scroll">
+            <table className="r-table">
+              <thead>
+                <tr>
+                  {block.columns.map((c, i) => (
+                    <th key={i}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {block.rows.map((row, i) => (
+                  <tr key={i}>
+                    {block.columns.map((_, j) => (
+                      <td key={j}>{row[j] ?? ""}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      );
     case "note": {
       const variant = block.variant ?? "point";
       return (

@@ -56,6 +56,42 @@ function blockHtml(doc: LessonDoc, block: Block): string {
       )}</div><div class="vp-children">${block.branches
         .map((b) => branchHtml(doc, b))
         .join("")}</div></div></div>`;
+    case "analysisCard": {
+      const items = block.items
+        .map((item) => {
+          const role = item.role ? doc.rolePalette[item.role] : null;
+          const swatch = role
+            ? `<span class="vp-analysis-swatch" style="background:${esc(
+                role.bg
+              )};border-color:${esc(role.color)};"></span>`
+            : "";
+          return `<div class="vp-analysis-item"><dt>${swatch}${esc(
+            item.label
+          )}</dt><dd>${esc(item.value)}</dd></div>`;
+        })
+        .join("");
+      return `<section class="vp-analysis">${
+        block.tag ? `<div class="vp-analysis-tag">${esc(block.tag)}</div>` : ""
+      }<h3>${esc(block.title)}</h3>${
+        block.source ? `<div class="vp-analysis-source">${esc(block.source)}</div>` : ""
+      }${
+        block.quote ? `<blockquote class="vp-analysis-quote">${esc(block.quote)}</blockquote>` : ""
+      }<dl class="vp-analysis-items">${items}</dl>${
+        block.takeaway ? `<div class="vp-analysis-takeaway">${esc(block.takeaway)}</div>` : ""
+      }</section>`;
+    }
+    case "table": {
+      const head = block.columns.map((c) => `<th>${esc(c)}</th>`).join("");
+      const rows = block.rows
+        .map(
+          (row) =>
+            `<tr>${block.columns.map((_, i) => `<td>${esc(row[i] ?? "")}</td>`).join("")}</tr>`
+        )
+        .join("");
+      return `<section class="vp-table-wrap">${
+        block.title ? `<h3 class="vp-table-title">${esc(block.title)}</h3>` : ""
+      }<div class="vp-table-scroll"><table class="vp-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    }
     case "note": {
       const variant = block.variant ?? "point";
       return `<aside class="vp-note vp-note--${variant}"><div class="vp-note-label">${esc(
@@ -108,6 +144,23 @@ body{margin:0;background:#f1f5f9;color:var(--vp-fg);font-family:-apple-system,Bl
 .vp-role{font-size:.72rem;font-weight:700;padding:.1em .45em;border-radius:999px;}
 .vp-role--plain{background:#e2e8f0;color:#475569;}
 .vp-val{font-weight:600;}
+.vp-analysis{border:1px solid var(--vp-line);border-radius:10px;padding:16px 18px;margin:18px 0;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.05);}
+.vp-analysis-tag{display:inline-flex;margin-bottom:6px;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:.75rem;font-weight:700;}
+.vp-analysis h3{margin:0 0 4px;font-size:1.05rem;}
+.vp-analysis-source{color:var(--vp-muted);font-size:.78rem;margin-bottom:10px;}
+.vp-analysis-quote{margin:10px 0;padding:10px 12px;border-left:4px solid #cbd5e1;background:#f8fafc;border-radius:6px;font-family:Georgia,"Times New Roman",serif;}
+.vp-analysis-items{display:grid;grid-template-columns:minmax(96px,auto) 1fr;gap:8px 14px;margin:12px 0 0;}
+.vp-analysis-item{display:contents;}
+.vp-analysis dt{font-weight:700;color:var(--vp-muted);}
+.vp-analysis dd{margin:0;}
+.vp-analysis-swatch{width:12px;height:12px;border:1px solid;display:inline-block;border-radius:3px;margin-right:6px;vertical-align:-1px;}
+.vp-analysis-takeaway{margin-top:12px;padding:9px 11px;border-radius:8px;background:#ecfdf5;color:#065f46;font-weight:600;}
+.vp-table-wrap{margin:18px 0;}
+.vp-table-title{font-size:1rem;margin:0 0 8px;}
+.vp-table-scroll{overflow-x:auto;}
+.vp-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--vp-line);border-radius:8px;overflow:hidden;}
+.vp-table th,.vp-table td{border:1px solid var(--vp-line);padding:8px 10px;text-align:left;vertical-align:top;}
+.vp-table th{background:#f8fafc;font-weight:700;}
 .vp-note{border-radius:10px;padding:.8em 1em;margin:1.2em 0;border:1px solid;}
 .vp-note-label{font-weight:700;font-size:.85rem;margin-bottom:.25em;}
 .vp-note--point{background:#eef2ff;border-color:#c7d2fe;}

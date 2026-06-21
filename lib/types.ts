@@ -30,6 +30,8 @@ export type Block =
   | ParagraphBlock
   | SentenceBlock
   | TreeBlock
+  | AnalysisCardBlock
+  | TableBlock
   | NoteBlock
   | ImageBlock
   | RawHtmlBlock; // 逃げ道（語彙で表せない例外用）
@@ -75,6 +77,33 @@ export type Branch = {
   children?: Branch[];
 };
 
+// 汎用分析カード：英語なら「文法項目」、理科なら「現象」、社会なら「出来事」などを扱う。
+export type AnalysisCardBlock = {
+  id: string;
+  type: "analysisCard";
+  title: string;
+  tag?: string;
+  source?: string;
+  quote?: string;
+  items: AnalysisItem[];
+  takeaway?: string;
+};
+export type AnalysisItem = {
+  id: string;
+  label: string;
+  value: string;
+  role?: string | null;
+};
+
+// 汎用表：比較、分類、根拠整理、手順整理などに使う。
+export type TableBlock = {
+  id: string;
+  type: "table";
+  title?: string;
+  columns: string[];
+  rows: string[][];
+};
+
 // 注釈ボックス（着眼点・ヒントなど）
 export type NoteBlock = {
   id: string;
@@ -112,6 +141,8 @@ export const BLOCK_TYPE_LABELS: Record<Block["type"], string> = {
   paragraph: "段落",
   sentence: "文（語の色分け）",
   tree: "樹形図",
+  analysisCard: "分析カード",
+  table: "表",
   note: "注釈",
   image: "画像",
   raw: "生HTML",

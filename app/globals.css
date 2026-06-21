@@ -354,6 +354,120 @@ button {
   color: #475569;
 }
 
+.r-analysis {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 16px 0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+.r-analysis__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.r-analysis__head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.r-analysis__tag {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.r-analysis__source {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 4px;
+}
+.r-analysis__quote {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 4px solid var(--line-strong);
+  background: #f8fafc;
+  border-radius: 6px;
+  font-family: Georgia, "Times New Roman", serif;
+}
+.r-analysis__items {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 8px 14px;
+  margin: 12px 0 0;
+}
+.r-analysis__item {
+  display: contents;
+}
+.r-analysis__item dt {
+  font-weight: 700;
+  color: var(--muted);
+}
+.r-analysis__item dd {
+  margin: 0;
+}
+.r-analysis__swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid;
+  display: inline-block;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.r-analysis__takeaway {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-weight: 600;
+}
+.r-table-wrap {
+  margin: 16px 0;
+}
+.r-table-title {
+  font-size: 1rem;
+  margin: 0 0 8px;
+}
+.r-table-scroll {
+  overflow-x: auto;
+}
+.r-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.r-table th,
+.r-table td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.r-table th {
+  background: #f8fafc;
+  font-weight: 700;
+}
+@media (max-width: 560px) {
+  .r-analysis__items {
+    grid-template-columns: 1fr;
+  }
+  .r-analysis__item {
+    display: block;
+  }
+  .r-analysis__item dt {
+    margin-top: 8px;
+  }
+}
+
 .r-note {
   border-radius: 10px;
   padding: 0.7em 0.9em;

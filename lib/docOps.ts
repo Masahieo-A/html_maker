@@ -73,6 +73,29 @@ export function makeEmptyBlock(type: Block["type"]): Block {
         root: "S（文の骨組み）",
         branches: [{ id: uid("br"), role: "主部 (S)", value: "..." }],
       };
+    case "analysisCard":
+      return {
+        id: uid("b"),
+        type: "analysisCard",
+        title: "分析カード",
+        tag: "着眼点",
+        source: "",
+        quote: "",
+        items: [
+          { id: uid("item"), label: "対象", value: "何を扱うか" },
+          { id: uid("item"), label: "根拠", value: "どう判断できるか" },
+          { id: uid("item"), label: "効果", value: "何が分かるようになるか" },
+        ],
+        takeaway: "この見方を使うと理解が安定します。",
+      };
+    case "table":
+      return {
+        id: uid("b"),
+        type: "table",
+        title: "整理表",
+        columns: ["項目", "内容", "根拠"],
+        rows: [["例", "説明", "判断材料"]],
+      };
     case "note":
       return {
         id: uid("b"),

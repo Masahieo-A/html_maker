@@ -11,6 +11,8 @@ const VALID_TYPES = new Set([
   "paragraph",
   "sentence",
   "tree",
+  "analysisCard",
+  "table",
   "note",
   "image",
   "raw",
@@ -70,6 +72,46 @@ function coerceBlock(raw: any): Block | null {
         : [];
       return { id, type, root: asString(raw?.root, "S"), branches };
     }
+    case "analysisCard": {
+      const items = Array.isArray(raw?.items)
+        ? raw.items.map((item: any) => ({
+            id: asString(item?.id) || uid("item"),
+            label: asString(item?.label, "項目"),
+            value: asString(item?.value),
+            role: item?.role == null ? null : asString(item.role),
+          }))
+        : [];
+      return {
+        id,
+        type,
+        title: asString(raw?.title, "分析"),
+        tag: raw?.tag == null ? undefined : asString(raw.tag),
+        source: raw?.source == null ? undefined : asString(raw.source),
+        quote: raw?.quote == null ? undefined : asString(raw.quote),
+        items,
+        takeaway: raw?.takeaway == null ? undefined : asString(raw.takeaway),
+      };
+    }
+    case "table": {
+      const columns = Array.isArray(raw?.columns)
+        ? raw.columns.map((c: any) => asString(c, ""))
+        : [];
+      const width = Math.max(columns.length, 1);
+      const rows = Array.isArray(raw?.rows)
+        ? raw.rows.map((row: any) => {
+            const cells = Array.isArray(row) ? row.map((c: any) => asString(c, "")) : [];
+            while (cells.length < width) cells.push("");
+            return cells.slice(0, width);
+          })
+        : [];
+      return {
+        id,
+        type,
+        title: raw?.title == null ? undefined : asString(raw.title),
+        columns: columns.length ? columns : ["項目", "内容"],
+        rows,
+      };
+    }
     case "note": {
       const variant = ["point", "tip", "warning"].includes(raw?.variant)
         ? raw.variant
@@ -120,6 +162,7 @@ function ensureRoles(doc: LessonDoc): LessonDoc {
   const used = new Set<string>();
   for (const b of doc.blocks) {
     if (b.type === "sentence") b.tokens.forEach((t) => t.role && used.add(t.role));
+    if (b.type === "analysisCard") b.items.forEach((item) => item.role && used.add(item.role));
   }
   const palette = { ...doc.rolePalette };
   let i = Object.keys(palette).length;
