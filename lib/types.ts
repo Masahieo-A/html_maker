@@ -15,6 +15,14 @@ export type Role = {
 /** 役割名（rolePalette のキー）→ 色 のパレット。色分けは"意味（働き）"を表す。 */
 export type RolePalette = Record<string, Role>;
 
+export type TextMark = {
+  id: string;
+  field: string;
+  start: number;
+  end: number;
+  role: string;
+};
+
 export type LessonDoc = {
   id: string;
   title: string;
@@ -41,12 +49,14 @@ export type HeadingBlock = {
   type: "heading";
   level: 1 | 2 | 3;
   text: string;
+  marks?: TextMark[];
 };
 
 export type ParagraphBlock = {
   id: string;
   type: "paragraph";
   text: string;
+  marks?: TextMark[];
 };
 
 // 文：1語ずつをノードとして持ち、役割（=色）を割り当てる
@@ -87,6 +97,7 @@ export type AnalysisCardBlock = {
   quote?: string;
   items: AnalysisItem[];
   takeaway?: string;
+  marks?: TextMark[];
 };
 export type AnalysisItem = {
   id: string;
@@ -111,6 +122,7 @@ export type NoteBlock = {
   label: string;
   body: string;
   variant?: "point" | "tip" | "warning";
+  marks?: TextMark[];
 };
 
 export type ImageBlock = {
@@ -134,6 +146,7 @@ export type Selection =
   | { kind: "token"; blockId: string; tokenId: string }
   | { kind: "tree-root"; blockId: string }
   | { kind: "branch"; blockId: string; branchId: string }
+  | { kind: "text-range"; blockId: string; field: string; start: number; end: number; text: string }
   | null;
 
 export const BLOCK_TYPE_LABELS: Record<Block["type"], string> = {

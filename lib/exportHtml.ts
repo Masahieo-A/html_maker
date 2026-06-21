@@ -2,7 +2,7 @@
 // LessonDoc → 自己完結・レスポンシブ・印刷可能な静的 HTML（要件 §5.5 / §8）
 // CSS はインライン、外部依存なし。生徒のスマホで崩れないこと。
 // ============================================================================
-import type { Block, Branch, LessonDoc, Role } from "./types";
+import type { Block, Branch, LessonDoc, Role, TextMark } from "./types";
 
 export function esc(s: string): string {
   return s
@@ -14,6 +14,33 @@ export function esc(s: string): string {
 
 function roleStyle(role: Role): string {
   return `color:${esc(role.color)};background:${esc(role.bg)};`;
+}
+
+function markedTextHtml(
+  text: string,
+  marks: TextMark[] | undefined,
+  doc: LessonDoc,
+  field: string
+): string {
+  const valid = (marks ?? [])
+    .filter((m) => m.field === field && m.start >= 0 && m.end <= text.length && m.end > m.start)
+    .sort((a, b) => a.start - b.start);
+  if (valid.length === 0) return esc(text);
+
+  let html = "";
+  let cursor = 0;
+  for (const mark of valid) {
+    if (mark.start < cursor) continue;
+    if (cursor < mark.start) html += esc(text.slice(cursor, mark.start));
+    const role = doc.rolePalette[mark.role];
+    const value = esc(text.slice(mark.start, mark.end));
+    html += role
+      ? `<span class="vp-text-mark" style="${roleStyle(role)}" title="${esc(role.label)}">${value}</span>`
+      : `<span class="vp-text-mark">${value}</span>`;
+    cursor = mark.end;
+  }
+  if (cursor < text.length) html += esc(text.slice(cursor));
+  return html;
 }
 
 function branchHtml(doc: LessonDoc, b: Branch): string {
@@ -33,9 +60,14 @@ function branchHtml(doc: LessonDoc, b: Branch): string {
 function blockHtml(doc: LessonDoc, block: Block): string {
   switch (block.type) {
     case "heading":
-      return `<h${block.level} class="vp-h vp-h${block.level}">${esc(block.text)}</h${block.level}>`;
+      return `<h${block.level} class="vp-h vp-h${block.level}">${markedTextHtml(
+        block.text,
+        block.marks,
+        doc,
+        "text"
+      )}</h${block.level}>`;
     case "paragraph":
-      return `<p class="vp-p">${esc(block.text)}</p>`;
+      return `<p class="vp-p">${markedTextHtml(block.text, block.marks, doc, "text")}</p>`;
     case "sentence": {
       const tokens = block.tokens
         .map((t) => {
@@ -67,17 +99,17 @@ function blockHtml(doc: LessonDoc, block: Block): string {
             : "";
           return `<div class="vp-analysis-item"><dt>${swatch}${esc(
             item.label
-          )}</dt><dd>${esc(item.value)}</dd></div>`;
+          )}</dt><dd>${markedTextHtml(item.value, block.marks, doc, `item:${item.id}:value`)}</dd></div>`;
         })
         .join("");
       return `<section class="vp-analysis">${
         block.tag ? `<div class="vp-analysis-tag">${esc(block.tag)}</div>` : ""
-      }<h3>${esc(block.title)}</h3>${
-        block.source ? `<div class="vp-analysis-source">${esc(block.source)}</div>` : ""
+      }<h3>${markedTextHtml(block.title, block.marks, doc, "title")}</h3>${
+        block.source ? `<div class="vp-analysis-source">${markedTextHtml(block.source, block.marks, doc, "source")}</div>` : ""
       }${
-        block.quote ? `<blockquote class="vp-analysis-quote">${esc(block.quote)}</blockquote>` : ""
+        block.quote ? `<blockquote class="vp-analysis-quote">${markedTextHtml(block.quote, block.marks, doc, "quote")}</blockquote>` : ""
       }<dl class="vp-analysis-items">${items}</dl>${
-        block.takeaway ? `<div class="vp-analysis-takeaway">${esc(block.takeaway)}</div>` : ""
+        block.takeaway ? `<div class="vp-analysis-takeaway">${markedTextHtml(block.takeaway, block.marks, doc, "takeaway")}</div>` : ""
       }</section>`;
     }
     case "table": {
@@ -96,7 +128,7 @@ function blockHtml(doc: LessonDoc, block: Block): string {
       const variant = block.variant ?? "point";
       return `<aside class="vp-note vp-note--${variant}"><div class="vp-note-label">${esc(
         block.label
-      )}</div><div class="vp-note-body">${esc(block.body)}</div></aside>`;
+      )}</div><div class="vp-note-body">${markedTextHtml(block.body, block.marks, doc, "body")}</div></aside>`;
     }
     case "image":
       return block.src
@@ -136,6 +168,7 @@ body{margin:0;background:#f1f5f9;color:var(--vp-fg);font-family:-apple-system,Bl
 .vp-sentence{font-size:1.15rem;line-height:2.2;margin:1em 0;}
 .vp-tok{padding:.12em .4em;border-radius:6px;font-weight:600;white-space:nowrap;}
 .vp-tok--plain{color:var(--vp-fg);}
+.vp-text-mark{padding:.05em .22em;border-radius:5px;font-weight:700;}
 .vp-tree{overflow-x:auto;padding:8px 0;margin:1em 0;}
 .vp-branch{display:flex;flex-direction:column;align-items:flex-start;}
 .vp-node{display:inline-flex;align-items:center;gap:.4em;border:1px solid var(--vp-line);background:#fff;border-radius:8px;padding:.35em .6em;margin:.25em 0;box-shadow:0 1px 2px rgba(0,0,0,.04);}

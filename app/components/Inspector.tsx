@@ -13,6 +13,7 @@ import type {
   Selection,
   SentenceBlock,
   TableBlock,
+  TextMark,
   TreeBlock,
 } from "@/lib/types";
 import {
@@ -117,6 +118,10 @@ export default function Inspector({
   return (
     <div>
       <div className="insp__title">インスペクタ</div>
+
+      {selection.kind === "text-range" && (
+        <TextRangeEditor doc={doc} block={block} selection={selection} onChange={onChange} />
+      )}
 
       {/* ブロック種別バッジ + 並べ替え/削除（ブロック選択時） */}
       {selection.kind === "block" && (
@@ -288,6 +293,113 @@ export default function Inspector({
 
       {aiPanel}
     </div>
+  );
+}
+
+function getBlockMarks(block: Block): TextMark[] {
+  return "marks" in block && Array.isArray(block.marks) ? block.marks : [];
+}
+
+function withBlockMarks(block: Block, marks: TextMark[]): Block {
+  if (
+    block.type === "heading" ||
+    block.type === "paragraph" ||
+    block.type === "analysisCard" ||
+    block.type === "note"
+  ) {
+    return { ...block, marks };
+  }
+  return block;
+}
+
+function ensureImportantRole(doc: LessonDoc): LessonDoc {
+  if (doc.rolePalette.important_phrase) return doc;
+  return {
+    ...doc,
+    rolePalette: {
+      ...doc.rolePalette,
+      important_phrase: {
+        label: "重要語句",
+        color: "#7c2d12",
+        bg: "#ffedd5",
+      },
+    },
+  };
+}
+
+function TextRangeEditor({
+  doc,
+  block,
+  selection,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: Block;
+  selection: Extract<NonNullable<Selection>, { kind: "text-range" }>;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const defaultRole =
+    (doc.rolePalette.important_phrase && "important_phrase") ||
+    Object.keys(doc.rolePalette).find((key) => doc.rolePalette[key].label.includes("重要")) ||
+    Object.keys(doc.rolePalette)[0] ||
+    "";
+  const [role, setRole] = useState(defaultRole);
+
+  const applyMark = (roleKey: string) => {
+    const baseDoc = roleKey === "important_phrase" ? ensureImportantRole(doc) : doc;
+    const mark: TextMark = {
+      id: uid("mark"),
+      field: selection.field,
+      start: selection.start,
+      end: selection.end,
+      role: roleKey,
+    };
+    onChange(updateBlock(baseDoc, block.id, (b) => withBlockMarks(b, [...getBlockMarks(b), mark])));
+  };
+
+  const removeOverlapping = () => {
+    onChange(
+      updateBlock(doc, block.id, (b) =>
+        withBlockMarks(
+          b,
+          getBlockMarks(b).filter(
+            (m) =>
+              m.field !== selection.field ||
+              m.end <= selection.start ||
+              m.start >= selection.end
+          )
+        )
+      )
+    );
+  };
+
+  return (
+    <>
+      <span className="insp__chip">範囲選択</span>
+      <p className="hint" style={{ marginTop: 0 }}>
+        選択範囲: 「{selection.text}」
+      </p>
+      <div className="field">
+        <label>マーカーの意味</label>
+        <RoleSelect doc={doc} value={role || null} onChange={(next) => setRole(next ?? "")} />
+      </div>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <button
+          className="btn btn--primary btn--sm"
+          disabled={!role}
+          onClick={() => role && applyMark(role)}
+        >
+          適用
+        </button>
+        <button className="btn btn--sm" onClick={() => applyMark("important_phrase")}>
+          重要語句にする
+        </button>
+        <button className="btn btn--sm btn--danger" onClick={removeOverlapping}>
+          この範囲のマーカー解除
+        </button>
+      </div>
+      <div className="divider" />
+    </>
   );
 }
 

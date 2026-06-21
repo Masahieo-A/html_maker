@@ -4,7 +4,7 @@
 // 「どこまでノードに分解するか = 編集可能な粒度」を体現する。
 // ============================================================================
 import React from "react";
-import type { Block, Branch, LessonDoc, Selection } from "@/lib/types";
+import type { Block, Branch, LessonDoc, Selection, TextMark } from "@/lib/types";
 
 type Props = {
   doc: LessonDoc;
@@ -21,6 +21,51 @@ function isSelected(sel: Selection, test: NonNullable<Selection>): boolean {
   if (test.kind === "branch" && sel.kind === "branch")
     return sel.branchId === test.branchId;
   return true;
+}
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return !!selection && !selection.isCollapsed && !!selection.toString().trim();
+}
+
+function renderMarkedText(
+  text: string,
+  marks: TextMark[] | undefined,
+  doc: LessonDoc,
+  field: string
+) {
+  const valid = (marks ?? [])
+    .filter((m) => m.field === field && m.start >= 0 && m.end <= text.length && m.end > m.start)
+    .sort((a, b) => a.start - b.start);
+  if (valid.length === 0) return text;
+
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const mark of valid) {
+    if (mark.start < cursor) continue;
+    if (cursor < mark.start) parts.push(text.slice(cursor, mark.start));
+    const role = doc.rolePalette[mark.role];
+    parts.push(
+      <span
+        className="text-mark"
+        key={mark.id}
+        title={role?.label ?? mark.role}
+        style={role ? { color: role.color, background: role.bg } : undefined}
+      >
+        {text.slice(mark.start, mark.end)}
+      </span>
+    );
+    cursor = mark.end;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+function fieldProps(blockId: string, field: string) {
+  return {
+    "data-vp-block": blockId,
+    "data-vp-field": field,
+  };
 }
 
 export function Legend({ doc }: { doc: LessonDoc }) {
@@ -112,6 +157,7 @@ function BlockView({
 }) {
   const blockSelected = isSelected(sel, { kind: "block", blockId: block.id });
   const selectBlock = (e: React.MouseEvent) => {
+    if (hasActiveTextSelection()) return;
     e.stopPropagation();
     onSelect({ kind: "block", blockId: block.id });
   };
@@ -122,8 +168,9 @@ function BlockView({
         <div
           className={`r-h r-h${block.level} node ${blockSelected ? "node--selected" : ""}`}
           onClick={selectBlock}
+          {...fieldProps(block.id, "text")}
         >
-          {block.text}
+          {renderMarkedText(block.text, block.marks, doc, "text")}
         </div>
       );
     case "paragraph":
@@ -131,8 +178,9 @@ function BlockView({
         <p
           className={`r-p node ${blockSelected ? "node--selected" : ""}`}
           onClick={selectBlock}
+          {...fieldProps(block.id, "text")}
         >
-          {block.text}
+          {renderMarkedText(block.text, block.marks, doc, "text")}
         </p>
       );
     case "sentence":
@@ -214,10 +262,20 @@ function BlockView({
         >
           <div className="r-analysis__head">
             {block.tag && <span className="r-analysis__tag">{block.tag}</span>}
-            <h3>{block.title}</h3>
+            <h3 {...fieldProps(block.id, "title")}>
+              {renderMarkedText(block.title, block.marks, doc, "title")}
+            </h3>
           </div>
-          {block.source && <div className="r-analysis__source">{block.source}</div>}
-          {block.quote && <blockquote className="r-analysis__quote">{block.quote}</blockquote>}
+          {block.source && (
+            <div className="r-analysis__source" {...fieldProps(block.id, "source")}>
+              {renderMarkedText(block.source, block.marks, doc, "source")}
+            </div>
+          )}
+          {block.quote && (
+            <blockquote className="r-analysis__quote" {...fieldProps(block.id, "quote")}>
+              {renderMarkedText(block.quote, block.marks, doc, "quote")}
+            </blockquote>
+          )}
           <dl className="r-analysis__items">
             {block.items.map((item) => {
               const role = item.role ? doc.rolePalette[item.role] : null;
@@ -232,12 +290,18 @@ function BlockView({
                     )}
                     {item.label}
                   </dt>
-                  <dd>{item.value}</dd>
+                  <dd {...fieldProps(block.id, `item:${item.id}:value`)}>
+                    {renderMarkedText(item.value, block.marks, doc, `item:${item.id}:value`)}
+                  </dd>
                 </div>
               );
             })}
           </dl>
-          {block.takeaway && <div className="r-analysis__takeaway">{block.takeaway}</div>}
+          {block.takeaway && (
+            <div className="r-analysis__takeaway" {...fieldProps(block.id, "takeaway")}>
+              {renderMarkedText(block.takeaway, block.marks, doc, "takeaway")}
+            </div>
+          )}
         </section>
       );
     case "table":
@@ -279,7 +343,9 @@ function BlockView({
           onClick={selectBlock}
         >
           <div className="r-note-label">{block.label}</div>
-          <div>{block.body}</div>
+          <div {...fieldProps(block.id, "body")}>
+            {renderMarkedText(block.body, block.marks, doc, "body")}
+          </div>
         </aside>
       );
     }
@@ -312,8 +378,41 @@ function BlockView({
 }
 
 export default function Renderer({ doc, selection, onSelect }: Props) {
+  const onMouseUp = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    const selectedText = selection.toString();
+    if (!selectedText.trim()) return;
+    const range = selection.getRangeAt(0);
+    const startEl =
+      range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as Element)
+        : range.startContainer.parentElement;
+    const endEl =
+      range.endContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.endContainer as Element)
+        : range.endContainer.parentElement;
+    const startField = startEl?.closest<HTMLElement>("[data-vp-block][data-vp-field]");
+    const endField = endEl?.closest<HTMLElement>("[data-vp-block][data-vp-field]");
+    if (!startField || !endField || startField !== endField) return;
+
+    const preRange = document.createRange();
+    preRange.selectNodeContents(startField);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    const start = preRange.toString().length;
+    const end = start + selectedText.length;
+    onSelect({
+      kind: "text-range",
+      blockId: startField.dataset.vpBlock ?? "",
+      field: startField.dataset.vpField ?? "",
+      start,
+      end,
+      text: selectedText,
+    });
+  };
+
   return (
-    <div onClick={() => onSelect(null)}>
+    <div onMouseUp={onMouseUp} onClick={() => !hasActiveTextSelection() && onSelect(null)}>
       <Legend doc={doc} />
       {doc.blocks.map((b) => (
         <BlockView

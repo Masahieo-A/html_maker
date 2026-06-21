@@ -3,7 +3,7 @@
 // 不正なら例外を投げ、呼び出し側で 1 回まで自動リトライする。
 // 欠けている id は補完し、未知の role はパレットに退避する。
 // ============================================================================
-import type { Block, Branch, LessonDoc, RolePalette, Token } from "./types";
+import type { Block, Branch, LessonDoc, RolePalette, TextMark, Token } from "./types";
 import { uid } from "./ids";
 
 const VALID_TYPES = new Set([
@@ -20,6 +20,20 @@ const VALID_TYPES = new Set([
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
+}
+
+function coerceMarks(raw: any): TextMark[] | undefined {
+  if (!Array.isArray(raw?.marks)) return undefined;
+  const marks = raw.marks
+    .map((m: any) => ({
+      id: asString(m?.id) || uid("mark"),
+      field: asString(m?.field),
+      start: Number(m?.start),
+      end: Number(m?.end),
+      role: asString(m?.role),
+    }))
+    .filter((m: TextMark) => m.field && m.role && Number.isFinite(m.start) && Number.isFinite(m.end) && m.end > m.start);
+  return marks.length ? marks : undefined;
 }
 
 function joinTextParts(parts: unknown[]): string {
@@ -120,10 +134,10 @@ function coerceBlock(raw: any): Block | null {
     case "heading": {
       const lvl = Number(raw?.level);
       const level = (lvl === 1 || lvl === 2 || lvl === 3 ? lvl : 2) as 1 | 2 | 3;
-      return { id, type, level, text: asString(raw?.text) || asString(raw?.title) };
+      return { id, type, level, text: asString(raw?.text) || asString(raw?.title), marks: coerceMarks(raw) };
     }
     case "paragraph":
-      return { id, type, text: asString(raw?.text) || asString(raw?.body) || asString(raw?.content) };
+      return { id, type, text: asString(raw?.text) || asString(raw?.body) || asString(raw?.content), marks: coerceMarks(raw) };
     case "sentence": {
       const tokens: Token[] = Array.isArray(raw?.tokens)
         ? raw.tokens.map((t: any) => ({
@@ -168,6 +182,7 @@ function coerceBlock(raw: any): Block | null {
         quote: raw?.quote == null ? undefined : asString(raw.quote),
         items: fallbackItems,
         takeaway: raw?.takeaway == null ? undefined : asString(raw.takeaway),
+        marks: coerceMarks(raw),
       };
     }
     case "table": {
@@ -200,6 +215,7 @@ function coerceBlock(raw: any): Block | null {
         label: asString(raw?.label, "メモ"),
         body: asString(raw?.body),
         variant,
+        marks: coerceMarks(raw),
       };
     }
     case "image":

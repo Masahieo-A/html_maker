@@ -95,6 +95,10 @@ export default function EditorPage() {
     }
     setAiBusy(true);
     try {
+      const scopedInstruction =
+        selection.kind === "text-range"
+          ? `次の選択範囲だけを主な編集対象にしてください。必要最小限の周辺文脈以外は変更しないでください。\n\n選択フィールド: ${selection.field}\n選択範囲: ${selection.start}-${selection.end}\n選択テキスト: ${selection.text}\n\n教師の指示: ${instruction}`
+          : instruction;
       const res = await fetch("/api/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -104,7 +108,7 @@ export default function EditorPage() {
           model: ai.model,
           block,
           palette: doc.rolePalette,
-          instruction,
+          instruction: scopedInstruction,
         }),
       });
       const data = await res.json();
