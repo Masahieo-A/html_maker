@@ -7,7 +7,6 @@ import React, { useState } from "react";
 import type {
   AnalysisCardBlock,
   Block,
-  Branch,
   LessonDoc,
   NoteBlock,
   Selection,
@@ -16,6 +15,7 @@ import type {
   TextMark,
   TreeBlock,
 } from "@/lib/types";
+import { BLOCK_TYPE_LABELS } from "@/lib/types";
 import {
   addChildBranch,
   findBlock,
@@ -118,6 +118,17 @@ export default function Inspector({
   return (
     <div>
       <div className="insp__title">インスペクタ</div>
+
+      {/* 子要素（語・枝・セル・範囲）選択中でも、常に親ブロックへ戻れる導線を出す */}
+      {selection.kind !== "block" && (
+        <button
+          className="btn btn--sm"
+          style={{ marginBottom: 12 }}
+          onClick={() => onSelect({ kind: "block", blockId: block.id })}
+        >
+          ◀ ブロック全体を選択（{BLOCK_TYPE_LABELS[block.type]}）
+        </button>
+      )}
 
       {selection.kind === "text-range" && (
         <TextRangeEditor doc={doc} block={block} selection={selection} onChange={onChange} />
@@ -263,6 +274,26 @@ export default function Inspector({
         />
       )}
 
+      {selection.kind === "token-range" && block.type === "sentence" && (
+        <TokenRangeEditor
+          doc={doc}
+          block={block}
+          tokenIds={selection.tokenIds}
+          text={selection.text}
+          onChange={onChange}
+        />
+      )}
+
+      {selection.kind === "table-cell" && block.type === "table" && (
+        <TableCellEditor
+          doc={doc}
+          block={block}
+          row={selection.row}
+          col={selection.col}
+          onChange={onChange}
+        />
+      )}
+
       {selection.kind === "tree-root" && block.type === "tree" && (
         <>
           <span className="insp__chip">樹形図 ルート</span>
@@ -291,7 +322,17 @@ export default function Inspector({
         />
       )}
 
+      <MarksManager doc={doc} block={block} onChange={onChange} />
+
       {aiPanel}
+
+      <div className="divider" />
+      <details>
+        <summary className="hint" style={{ cursor: "pointer" }}>
+          役割パレット（色 = 意味）を編集
+        </summary>
+        <PaletteEditor doc={doc} onChange={onChange} />
+      </details>
     </div>
   );
 }
@@ -305,11 +346,46 @@ function withBlockMarks(block: Block, marks: TextMark[]): Block {
     block.type === "heading" ||
     block.type === "paragraph" ||
     block.type === "analysisCard" ||
+    block.type === "table" ||
     block.type === "note"
   ) {
     return { ...block, marks };
   }
   return block;
+}
+
+/** マーク対象フィールドの生テキストを取得（マーカー一覧の抜粋表示用） */
+function getFieldText(block: Block, field: string): string {
+  switch (block.type) {
+    case "heading":
+    case "paragraph":
+      return field === "text" ? block.text : "";
+    case "note":
+      if (field === "body") return block.body;
+      if (field === "label") return block.label;
+      return "";
+    case "analysisCard": {
+      if (field === "title") return block.title;
+      if (field === "tag") return block.tag ?? "";
+      if (field === "source") return block.source ?? "";
+      if (field === "quote") return block.quote ?? "";
+      if (field === "takeaway") return block.takeaway ?? "";
+      const m = field.match(/^item:(.+):(label|value)$/);
+      if (m) {
+        const item = block.items.find((i) => i.id === m[1]);
+        return item ? (m[2] === "label" ? item.label : item.value) : "";
+      }
+      return "";
+    }
+    case "table": {
+      if (field === "title") return block.title ?? "";
+      const m = field.match(/^cell:(\d+):(\d+)$/);
+      if (m) return block.rows[Number(m[1])]?.[Number(m[2])] ?? "";
+      return "";
+    }
+    default:
+      return "";
+  }
 }
 
 function ensureImportantRole(doc: LessonDoc): LessonDoc {
@@ -354,7 +430,20 @@ function TextRangeEditor({
       end: selection.end,
       role: roleKey,
     };
-    onChange(updateBlock(baseDoc, block.id, (b) => withBlockMarks(b, [...getBlockMarks(b), mark])));
+    // 重なった既存マークは置き換える（重複マークは描画時に黙って消えるため）
+    onChange(
+      updateBlock(baseDoc, block.id, (b) =>
+        withBlockMarks(b, [
+          ...getBlockMarks(b).filter(
+            (m) =>
+              m.field !== selection.field ||
+              m.end <= selection.start ||
+              m.start >= selection.end
+          ),
+          mark,
+        ])
+      )
+    );
   };
 
   const removeOverlapping = () => {
@@ -447,10 +536,11 @@ function AnalysisCardEditor({
   block: AnalysisCardBlock;
   onChange: (d: LessonDoc) => void;
 }) {
-  const [itemsText, setItemsText] = useState(JSON.stringify(block.items, null, 2));
-  const [itemsError, setItemsError] = useState<string | null>(null);
+  // ローカル state を持たず doc を直接パッチする（選択切替・undo・AI編集に常に追従）
   const patch = (p: Partial<AnalysisCardBlock>) =>
-    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as any), ...p })));
+    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as AnalysisCardBlock), ...p })));
+  const patchItem = (id: string, p: Partial<AnalysisCardBlock["items"][number]>) =>
+    patch({ items: block.items.map((item) => (item.id === id ? { ...item, ...p } : item)) });
   return (
     <>
       <span className="insp__chip">分析カード</span>
@@ -471,25 +561,55 @@ function AnalysisCardEditor({
         <textarea className="textarea" value={block.quote ?? ""} onChange={(e) => patch({ quote: e.target.value || undefined })} />
       </div>
       <div className="field">
-        <label>項目 JSON</label>
-        <textarea
-          className="textarea"
-          style={{ minHeight: 150, fontFamily: "monospace", fontSize: 12.5 }}
-          value={itemsText}
-          onChange={(e) => {
-            const next = e.target.value;
-            setItemsText(next);
-            try {
-              const parsed = JSON.parse(next);
-              if (!Array.isArray(parsed)) throw new Error("配列ではありません");
-              patch({ items: parsed });
-              setItemsError(null);
-            } catch (err: any) {
-              setItemsError(err?.message ?? "JSONとして解釈できません");
-            }
-          }}
-        />
-        {itemsError && <p className="hint" style={{ color: "var(--danger)" }}>{itemsError}</p>}
+        <label>項目</label>
+        {block.items.map((item) => (
+          <div
+            key={item.id}
+            style={{
+              border: "1px solid var(--line)",
+              borderRadius: 8,
+              padding: 8,
+              marginBottom: 8,
+            }}
+          >
+            <div className="row" style={{ marginBottom: 6 }}>
+              <input
+                className="input"
+                placeholder="ラベル（例: 根拠）"
+                value={item.label}
+                onChange={(e) => patchItem(item.id, { label: e.target.value })}
+              />
+              <button
+                className="btn btn--sm btn--danger"
+                onClick={() => patch({ items: block.items.filter((i) => i.id !== item.id) })}
+              >
+                ×
+              </button>
+            </div>
+            <textarea
+              className="textarea"
+              style={{ minHeight: 48, marginBottom: 6 }}
+              placeholder="内容"
+              value={item.value}
+              onChange={(e) => patchItem(item.id, { value: e.target.value })}
+            />
+            <RoleSelect
+              doc={doc}
+              value={item.role ?? null}
+              onChange={(role) => patchItem(item.id, { role })}
+            />
+          </div>
+        ))}
+        <button
+          className="btn btn--sm"
+          onClick={() =>
+            patch({
+              items: [...block.items, { id: uid("item"), label: "項目", value: "", role: null }],
+            })
+          }
+        >
+          ＋ 項目を追加
+        </button>
       </div>
       <div className="field">
         <label>まとめ</label>
@@ -508,10 +628,25 @@ function TableEditor({
   block: TableBlock;
   onChange: (d: LessonDoc) => void;
 }) {
-  const [rowsText, setRowsText] = useState(JSON.stringify(block.rows, null, 2));
-  const [rowsError, setRowsError] = useState<string | null>(null);
+  // ローカル state を持たず doc を直接パッチする（選択切替・undo・AI編集に常に追従）
   const patch = (p: Partial<TableBlock>) =>
-    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as any), ...p })));
+    onChange(updateBlock(doc, block.id, (b) => ({ ...(b as TableBlock), ...p })));
+  const setCell = (i: number, j: number, v: string) =>
+    patch({
+      rows: block.rows.map((row, ri) => (ri === i ? row.map((c, ci) => (ci === j ? v : c)) : row)),
+    });
+  const addColumn = () =>
+    patch({
+      columns: [...block.columns, "新しい列"],
+      rows: block.rows.map((r) => [...r, ""]),
+    });
+  const removeColumn = (j: number) => {
+    if (block.columns.length <= 1) return;
+    patch({
+      columns: block.columns.filter((_, i) => i !== j),
+      rows: block.rows.map((r) => r.filter((_, i) => i !== j)),
+    });
+  };
   return (
     <>
       <span className="insp__chip">表</span>
@@ -520,34 +655,114 @@ function TableEditor({
         <input className="input" value={block.title ?? ""} onChange={(e) => patch({ title: e.target.value || undefined })} />
       </div>
       <div className="field">
-        <label>列名（1行に1列）</label>
-        <textarea
-          className="textarea"
-          value={block.columns.join("\n")}
-          onChange={(e) => patch({ columns: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
-        />
+        <label>列名</label>
+        {block.columns.map((c, j) => (
+          <div className="row" key={j} style={{ marginBottom: 6 }}>
+            <input
+              className="input"
+              value={c}
+              onChange={(e) =>
+                patch({ columns: block.columns.map((col, i) => (i === j ? e.target.value : col)) })
+              }
+            />
+            <button
+              className="btn btn--sm btn--danger"
+              title="この列を削除"
+              disabled={block.columns.length <= 1}
+              onClick={() => removeColumn(j)}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button className="btn btn--sm" onClick={addColumn}>
+          ＋ 列を追加
+        </button>
       </div>
       <div className="field">
-        <label>行 JSON</label>
+        <label>行（セルはビュー上のクリックでも編集可）</label>
+        {block.rows.map((row, i) => (
+          <div
+            key={i}
+            style={{
+              border: "1px solid var(--line)",
+              borderRadius: 8,
+              padding: 8,
+              marginBottom: 8,
+            }}
+          >
+            {block.columns.map((c, j) => (
+              <div className="row" key={j} style={{ marginBottom: 4 }}>
+                <span className="hint" style={{ minWidth: 64, fontSize: 11 }}>
+                  {c}
+                </span>
+                <input
+                  className="input"
+                  value={row[j] ?? ""}
+                  onChange={(e) => setCell(i, j, e.target.value)}
+                />
+              </div>
+            ))}
+            <button
+              className="btn btn--sm btn--danger"
+              onClick={() => patch({ rows: block.rows.filter((_, ri) => ri !== i) })}
+            >
+              この行を削除
+            </button>
+          </div>
+        ))}
+        <button
+          className="btn btn--sm"
+          onClick={() => patch({ rows: [...block.rows, block.columns.map(() => "")] })}
+        >
+          ＋ 行を追加
+        </button>
+      </div>
+    </>
+  );
+}
+
+function TableCellEditor({
+  doc,
+  block,
+  row,
+  col,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: TableBlock;
+  row: number;
+  col: number;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const value = block.rows[row]?.[col];
+  if (value === undefined) return <p className="hint">セルが見つかりません。</p>;
+  return (
+    <>
+      <span className="insp__chip">セル</span>
+      <div className="field">
+        <label>
+          {row + 1} 行目 ・ 「{block.columns[col] ?? `${col + 1} 列目`}」
+        </label>
         <textarea
           className="textarea"
-          style={{ minHeight: 150, fontFamily: "monospace", fontSize: 12.5 }}
-          value={rowsText}
-          onChange={(e) => {
-            const next = e.target.value;
-            setRowsText(next);
-            try {
-              const parsed = JSON.parse(next);
-              if (!Array.isArray(parsed)) throw new Error("配列ではありません");
-              patch({ rows: parsed });
-              setRowsError(null);
-            } catch (err: any) {
-              setRowsError(err?.message ?? "JSONとして解釈できません");
-            }
-          }}
+          value={value}
+          onChange={(e) =>
+            onChange(
+              updateBlock(doc, block.id, (b) => {
+                const t = b as TableBlock;
+                return {
+                  ...t,
+                  rows: t.rows.map((r, ri) =>
+                    ri === row ? r.map((c, ci) => (ci === col ? e.target.value : c)) : r
+                  ),
+                };
+              })
+            )
+          }
         />
-        {rowsError && <p className="hint" style={{ color: "var(--danger)" }}>{rowsError}</p>}
       </div>
+      <p className="hint">セル内の文字をドラッグ選択するとマーカーも付けられます。</p>
     </>
   );
 }
@@ -689,6 +904,94 @@ function TokenEditor({
         <label>役割（色）</label>
         <RoleSelect doc={doc} value={token.role} onChange={(role) => patch({ role })} />
       </div>
+    </>
+  );
+}
+
+function TokenRangeEditor({
+  doc,
+  block,
+  tokenIds,
+  text,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: SentenceBlock;
+  tokenIds: string[];
+  text: string;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const apply = (role: string | null) =>
+    onChange(
+      replaceBlock(doc, block.id, {
+        ...block,
+        tokens: block.tokens.map((t) => (tokenIds.includes(t.id) ? { ...t, role } : t)),
+      })
+    );
+  return (
+    <>
+      <span className="insp__chip">語の範囲（{tokenIds.length} 語）</span>
+      <p className="hint" style={{ marginTop: 0 }}>
+        選択範囲: 「{text}」
+      </p>
+      <div className="field">
+        <label>まとめて役割（色）を割り当て</label>
+        <RoleSelect doc={doc} value={null} onChange={(role) => apply(role)} />
+      </div>
+      <button className="btn btn--sm btn--danger" onClick={() => apply(null)}>
+        この範囲の役割を外す
+      </button>
+      <div className="divider" />
+    </>
+  );
+}
+
+function MarksManager({
+  doc,
+  block,
+  onChange,
+}: {
+  doc: LessonDoc;
+  block: Block;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const marks = getBlockMarks(block);
+  if (marks.length === 0) return null;
+  return (
+    <>
+      <div className="divider" />
+      <div className="insp__title">マーカー一覧</div>
+      {marks.map((m) => {
+        const fieldText = getFieldText(block, m.field);
+        const excerpt = fieldText.slice(m.start, m.end) || `${m.field} ${m.start}-${m.end}`;
+        const role = doc.rolePalette[m.role];
+        return (
+          <div className="row" key={m.id} style={{ marginBottom: 6, alignItems: "center" }}>
+            <span
+              className="text-mark"
+              style={role ? { color: role.color, background: role.bg } : undefined}
+            >
+              {excerpt.length > 24 ? excerpt.slice(0, 24) + "…" : excerpt}
+            </span>
+            <span className="hint" style={{ flex: 1 }}>
+              {role?.label ?? m.role}
+            </span>
+            <button
+              className="btn btn--sm btn--danger"
+              title="このマーカーを削除"
+              onClick={() =>
+                onChange(
+                  updateBlock(doc, block.id, (b) =>
+                    withBlockMarks(b, getBlockMarks(b).filter((x) => x.id !== m.id))
+                  )
+                )
+              }
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
     </>
   );
 }

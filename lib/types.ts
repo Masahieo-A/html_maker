@@ -29,6 +29,8 @@ export type LessonDoc = {
   version: number;
   rolePalette: RolePalette;
   blocks: Block[];
+  /** HTMLインポート時に元文書の <style> を保持する（デザイン維持モード用） */
+  customCss?: string;
   /** 保存・並べ替え用メタ（任意） */
   updatedAt?: number;
 };
@@ -113,6 +115,8 @@ export type TableBlock = {
   title?: string;
   columns: string[];
   rows: string[][];
+  /** field は "title" または "cell:{行}:{列}" */
+  marks?: TextMark[];
 };
 
 // 注釈ボックス（着眼点・ヒントなど）
@@ -144,8 +148,10 @@ export type RawHtmlBlock = {
 export type Selection =
   | { kind: "block"; blockId: string }
   | { kind: "token"; blockId: string; tokenId: string }
+  | { kind: "token-range"; blockId: string; tokenIds: string[]; text: string }
   | { kind: "tree-root"; blockId: string }
   | { kind: "branch"; blockId: string; branchId: string }
+  | { kind: "table-cell"; blockId: string; row: number; col: number }
   | { kind: "text-range"; blockId: string; field: string; start: number; end: number; text: string }
   | null;
 

@@ -3,17 +3,21 @@
 // CSS はインライン、外部依存なし。生徒のスマホで崩れないこと。
 // ============================================================================
 import type { Block, Branch, LessonDoc, Role, TextMark } from "./types";
+import { sanitizeHtml, safeCssColor } from "./sanitize";
 
 export function esc(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function roleStyle(role: Role): string {
-  return `color:${esc(role.color)};background:${esc(role.bg)};`;
+  const color = safeCssColor(role.color, "#334155");
+  const bg = safeCssColor(role.bg, "#e2e8f0");
+  return `color:${color};background:${bg};`;
 }
 
 function markedTextHtml(
@@ -93,17 +97,21 @@ function blockHtml(doc: LessonDoc, block: Block): string {
         .map((item) => {
           const role = item.role ? doc.rolePalette[item.role] : null;
           const swatch = role
-            ? `<span class="vp-analysis-swatch" style="background:${esc(
-                role.bg
-              )};border-color:${esc(role.color)};"></span>`
+            ? `<span class="vp-analysis-swatch" style="background:${safeCssColor(
+                role.bg,
+                "#e2e8f0"
+              )};border-color:${safeCssColor(role.color, "#334155")};"></span>`
             : "";
-          return `<div class="vp-analysis-item"><dt>${swatch}${esc(
-            item.label
+          return `<div class="vp-analysis-item"><dt>${swatch}${markedTextHtml(
+            item.label,
+            block.marks,
+            doc,
+            `item:${item.id}:label`
           )}</dt><dd>${markedTextHtml(item.value, block.marks, doc, `item:${item.id}:value`)}</dd></div>`;
         })
         .join("");
       return `<section class="vp-analysis">${
-        block.tag ? `<div class="vp-analysis-tag">${esc(block.tag)}</div>` : ""
+        block.tag ? `<div class="vp-analysis-tag">${markedTextHtml(block.tag, block.marks, doc, "tag")}</div>` : ""
       }<h3>${markedTextHtml(block.title, block.marks, doc, "title")}</h3>${
         block.source ? `<div class="vp-analysis-source">${markedTextHtml(block.source, block.marks, doc, "source")}</div>` : ""
       }${
@@ -116,18 +124,23 @@ function blockHtml(doc: LessonDoc, block: Block): string {
       const head = block.columns.map((c) => `<th>${esc(c)}</th>`).join("");
       const rows = block.rows
         .map(
-          (row) =>
-            `<tr>${block.columns.map((_, i) => `<td>${esc(row[i] ?? "")}</td>`).join("")}</tr>`
+          (row, r) =>
+            `<tr>${block.columns
+              .map((_, c) => `<td>${markedTextHtml(row[c] ?? "", block.marks, doc, `cell:${r}:${c}`)}</td>`)
+              .join("")}</tr>`
         )
         .join("");
       return `<section class="vp-table-wrap">${
-        block.title ? `<h3 class="vp-table-title">${esc(block.title)}</h3>` : ""
+        block.title ? `<h3 class="vp-table-title">${markedTextHtml(block.title, block.marks, doc, "title")}</h3>` : ""
       }<div class="vp-table-scroll"><table class="vp-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div></section>`;
     }
     case "note": {
       const variant = block.variant ?? "point";
-      return `<aside class="vp-note vp-note--${variant}"><div class="vp-note-label">${esc(
-        block.label
+      return `<aside class="vp-note vp-note--${variant}"><div class="vp-note-label">${markedTextHtml(
+        block.label,
+        block.marks,
+        doc,
+        "label"
       )}</div><div class="vp-note-body">${markedTextHtml(block.body, block.marks, doc, "body")}</div></aside>`;
     }
     case "image":
@@ -137,7 +150,8 @@ function blockHtml(doc: LessonDoc, block: Block): string {
           )}" loading="lazy"><figcaption>${esc(block.alt)}</figcaption></figure>`
         : "";
     case "raw":
-      return `<div class="vp-raw">${block.html}</div>`;
+      // XSS対策: 書き出しHTMLは生徒に配布されるため必ずサニタイズする
+      return `<div class="vp-raw">${sanitizeHtml(block.html)}</div>`;
   }
 }
 
@@ -215,6 +229,12 @@ body{margin:0;background:#f1f5f9;color:var(--vp-fg);font-family:-apple-system,Bl
 
 export function exportHtml(doc: LessonDoc): string {
   const body = doc.blocks.map((b) => blockHtml(doc, b)).join("\n");
+  // 元データを埋め込む: 書き出しHTMLが「配布物」であると同時に「保存形式」になり、
+  // インポートページから無劣化で復元できる（</script> 対策で < をエスケープ）。
+  const embedded = JSON.stringify(doc).replace(/</g, "\\u003c");
+  const customCss = doc.customCss
+    ? `<style>${doc.customCss.replace(/<\/style/gi, "<\\/style")}</style>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -222,6 +242,8 @@ export function exportHtml(doc: LessonDoc): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(doc.title)}</title>
 <style>${STYLES}</style>
+${customCss}
+<script type="application/json" id="viewpoint-doc">${embedded}</script>
 </head>
 <body>
 <main class="vp-doc">

@@ -43,8 +43,9 @@ export function moveBlock(doc: LessonDoc, blockId: string, dir: -1 | 1): LessonD
 }
 
 export function addBlock(doc: LessonDoc, block: Block, afterId?: string): LessonDoc {
-  if (!afterId) return { ...doc, blocks: [...doc.blocks, block] };
-  const idx = doc.blocks.findIndex((b) => b.id === afterId);
+  const idx = afterId ? doc.blocks.findIndex((b) => b.id === afterId) : -1;
+  // afterId 未指定・不明のときは末尾に追加
+  if (idx < 0) return { ...doc, blocks: [...doc.blocks, block] };
   const blocks = [...doc.blocks];
   blocks.splice(idx + 1, 0, block);
   return { ...doc, blocks };

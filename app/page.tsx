@@ -74,6 +74,9 @@ export default function HomePage() {
           <Link className="btn btn--primary" href="/new">
             ✨ AI で下書き生成
           </Link>
+          <Link className="btn" href="/import">
+            📂 HTML を読み込む
+          </Link>
           <button className="btn" onClick={createBlank}>
             ＋ 空の教材
           </button>

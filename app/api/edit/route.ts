@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callModel, type Provider } from "@/lib/aiServer";
 import { parseBlock } from "@/lib/validate";
 import { SCHEMA_BLOCK, buildEditUser } from "@/lib/prompts";
+import { checkAccess } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -16,6 +17,8 @@ type Body = {
 };
 
 export async function POST(req: NextRequest) {
+  const denied = checkAccess(req);
+  if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
   let body: Body;
   try {
     body = (await req.json()) as Body;

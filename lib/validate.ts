@@ -5,6 +5,7 @@
 // ============================================================================
 import type { Block, Branch, LessonDoc, RolePalette, TextMark, Token } from "./types";
 import { uid } from "./ids";
+import { safeCssColor } from "./sanitize";
 
 const VALID_TYPES = new Set([
   "heading",
@@ -93,7 +94,7 @@ function normalizeBlockType(raw: any): string {
     ].includes(type)
   )
     return "analysisCard";
-  if (["table", "matrix", "comparison", "comparisonTable".toLowerCase()].includes(type)) return "table";
+  if (["table", "matrix", "comparison", "comparisontable"].includes(type)) return "table";
   if (["note", "tip", "warning", "hint", "callout"].includes(type)) return "note";
   if (["image", "figure", "fig"].includes(type)) return "image";
   if (["raw", "html"].includes(type)) return "raw";
@@ -203,6 +204,7 @@ function coerceBlock(raw: any): Block | null {
         title: raw?.title == null ? undefined : asString(raw.title),
         columns: columns.length ? columns : ["項目", "内容"],
         rows: rows.length ? rows : [["内容", summarizeUnknown(raw)]],
+        marks: coerceMarks(raw),
       };
     }
     case "note": {
@@ -234,8 +236,8 @@ function coercePalette(raw: any): RolePalette {
       const r = raw[key];
       palette[key] = {
         label: asString(r?.label, key),
-        color: asString(r?.color, "#334155"),
-        bg: asString(r?.bg, "#e2e8f0"),
+        color: safeCssColor(asString(r?.color), "#334155"),
+        bg: safeCssColor(asString(r?.bg), "#e2e8f0"),
       };
     }
   }
@@ -307,6 +309,7 @@ export function parseLessonDoc(jsonText: string, keepId?: string): LessonDoc {
     version: Number.isFinite(obj.version) ? Number(obj.version) : 1,
     rolePalette: coercePalette(obj.rolePalette),
     blocks,
+    customCss: asString(obj.customCss) || undefined,
     updatedAt: Date.now(),
   };
   doc = ensureRoles(doc);

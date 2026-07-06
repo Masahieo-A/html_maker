@@ -7,21 +7,20 @@ export function useHistory<T>(initial: T) {
   const [present, setPresent] = useState<T>(initial);
   const past = useRef<T[]>([]);
   const future = useRef<T[]>([]);
-  const [, force] = useState(0);
-  const rerender = () => force((n) => n + 1);
+
+  // present を ref でも保持して commit のクロージャ問題を回避
+  const presentRef = useRef<T>(initial);
+  presentRef.current = present;
 
   const commit = useCallback((next: T) => {
+    // 変化のない commit（境界での移動など）は履歴に積まない
+    if (next === presentRef.current) return;
     past.current.push(presentRef.current);
     if (past.current.length > 100) past.current.shift();
     future.current = [];
     presentRef.current = next;
     setPresent(next);
-    rerender();
   }, []);
-
-  // present を ref でも保持して commit のクロージャ問題を回避
-  const presentRef = useRef<T>(initial);
-  presentRef.current = present;
 
   const undo = useCallback(() => {
     if (past.current.length === 0) return;
@@ -29,7 +28,6 @@ export function useHistory<T>(initial: T) {
     future.current.unshift(presentRef.current);
     presentRef.current = prev;
     setPresent(prev);
-    rerender();
   }, []);
 
   const redo = useCallback(() => {
@@ -38,16 +36,14 @@ export function useHistory<T>(initial: T) {
     past.current.push(presentRef.current);
     presentRef.current = next;
     setPresent(next);
-    rerender();
   }, []);
 
-  // 履歴を消さずに present を差し替える（読み込み・保存の初期化用）
+  // 履歴を破棄して present を差し替える（教材の読み込み・復元の初期化用）
   const reset = useCallback((value: T) => {
     past.current = [];
     future.current = [];
     presentRef.current = value;
     setPresent(value);
-    rerender();
   }, []);
 
   return {

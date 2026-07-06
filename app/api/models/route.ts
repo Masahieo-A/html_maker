@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Provider } from "@/lib/aiServer";
+import { checkAccess } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 // プロバイダの「実際に使えるモデル一覧」をキーで取得する。
 // モデル名は時々変わる（旧名は404）ため、ハードコードに頼らず動的に列挙する。
 export async function POST(req: NextRequest) {
+  const denied = checkAccess(req);
+  if (denied) return NextResponse.json({ models: [], error: denied.error }, { status: denied.status });
   let body: { provider: Provider; apiKey?: string };
   try {
     body = await req.json();

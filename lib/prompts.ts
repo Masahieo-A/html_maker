@@ -45,7 +45,8 @@ export const SCHEMA_BLOCK = `あなたは英語教材の構造化データを編
 出力は **そのブロックのJSONオブジェクトのみ**（前置き・説明・コードフェンス禁止）。idは変更しないこと。
 色(role)は意味を表すため、既存のroleキーの体系に合わせること。
 analysisCard は title/tag/source/quote/items/takeaway を保ち、items は {id,label,value,role?} の配列にすること。
-table は title/columns/rows を保ち、rows の各行は columns と同じ列数にすること。`;
+table は title/columns/rows を保ち、rows の各行は columns と同じ列数にすること。
+raw ブロック（type:"raw"）の場合は、html の HTML 構造・class 名・スタイルをできるだけ保ったまま、指示された部分だけを修正すること。script タグや on 属性は入れないこと。`;
 
 export function buildEditUser(block: unknown, palette: unknown, instruction: string): string {
   return `# 現在のブロック\n${JSON.stringify(block)}\n\n# 役割パレット（参考）\n${JSON.stringify(

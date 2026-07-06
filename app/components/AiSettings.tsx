@@ -25,6 +25,7 @@ export default function AiSettingsPanel({
   const [serverKeys, setServerKeys] = useState<ServerKeys>({
     anthropic: false,
     gemini: false,
+    passcodeRequired: false,
   });
   const [models, setModels] = useState<string[]>(DEFAULT_MODELS.anthropic);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -38,26 +39,30 @@ export default function AiSettingsPanel({
 
   const serverHasForProvider = serverKeys[s.provider];
 
-  // プロバイダ or キーが変わったら、実際に使えるモデル一覧を取得（失敗時は既定値）
+  // プロバイダ or キーが変わったら、実際に使えるモデル一覧を取得（失敗時は既定値）。
+  // キー入力の1文字ごとに外部 API を叩かないよう 500ms デバウンスする。
   useEffect(() => {
     let alive = true;
     setLoadingModels(true);
-    fetchModels(s.provider, s.apiKey).then((list) => {
-      if (!alive) return;
-      const fallback = DEFAULT_MODELS[s.provider];
-      const final = list.length ? list : fallback;
-      setModels(final);
-      // 現在の選択が一覧に無ければ先頭に寄せる
-      setS((prev) =>
-        final.includes(prev.model) ? prev : { ...prev, model: final[0] }
-      );
-      setLoadingModels(false);
-    });
+    const timer = setTimeout(() => {
+      fetchModels(s.provider, s.apiKey, s.passcode).then((list) => {
+        if (!alive) return;
+        const fallback = DEFAULT_MODELS[s.provider];
+        const final = list.length ? list : fallback;
+        setModels(final);
+        // 現在の選択が一覧に無ければ先頭に寄せる
+        setS((prev) =>
+          final.includes(prev.model) ? prev : { ...prev, model: final[0] }
+        );
+        setLoadingModels(false);
+      });
+    }, 500);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.provider, s.apiKey, serverKeys.anthropic, serverKeys.gemini]);
+  }, [s.provider, s.apiKey, s.passcode, serverKeys.anthropic, serverKeys.gemini]);
 
   const update = (patch: Partial<AiSettings>) => {
     const next = { ...s, ...patch };
@@ -145,6 +150,21 @@ export default function AiSettingsPanel({
             </p>
           )}
         </div>
+        {serverKeys.passcodeRequired && (
+          <div className="field">
+            <label>アクセスパスコード（必須）</label>
+            <input
+              className="input"
+              type="password"
+              placeholder="管理者が設定した APP_PASSCODE"
+              value={s.passcode ?? ""}
+              onChange={(e) => update({ passcode: e.target.value })}
+            />
+            <p className="hint" style={{ marginTop: 4 }}>
+              このサーバーは第三者利用防止のためパスコードが必要です。
+            </p>
+          </div>
+        )}
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 8 }}>
           <button className="btn" onClick={onClose}>
             閉じる

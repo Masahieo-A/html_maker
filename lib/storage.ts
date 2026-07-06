@@ -42,12 +42,18 @@ export function loadLesson(id: string): LessonDoc | null {
   }
 }
 
-export function saveLesson(doc: LessonDoc): void {
-  const withTime: LessonDoc = { ...doc, updatedAt: Date.now() };
-  localStorage.setItem(DOC_PREFIX + doc.id, JSON.stringify(withTime));
-  const metas = readIndex().filter((m) => m.id !== doc.id);
-  metas.push({ id: doc.id, title: doc.title, updatedAt: withTime.updatedAt! });
-  writeIndex(metas);
+/** 保存の成否を返す。localStorage の容量超過などで失敗し得るため、呼び出し側で通知すること。 */
+export function saveLesson(doc: LessonDoc): boolean {
+  try {
+    const withTime: LessonDoc = { ...doc, updatedAt: Date.now() };
+    localStorage.setItem(DOC_PREFIX + doc.id, JSON.stringify(withTime));
+    const metas = readIndex().filter((m) => m.id !== doc.id);
+    metas.push({ id: doc.id, title: doc.title, updatedAt: withTime.updatedAt! });
+    writeIndex(metas);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function deleteLesson(id: string): void {
@@ -73,14 +79,16 @@ export type AiSettings = {
   provider: "anthropic" | "gemini";
   apiKey: string;
   model: string;
+  /** サーバーが APP_PASSCODE を要求する場合のアクセスパスコード */
+  passcode?: string;
 };
 
 const AI_KEY = "viewpoint:ai";
 
 // 動的取得に失敗したときのフォールバック既定値（実際の一覧は /api/models で取得）
 export const DEFAULT_MODELS = {
-  anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
-  gemini: ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"],
+  anthropic: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-pro"],
 };
 
 export function loadAiSettings(): AiSettings {
@@ -99,28 +107,44 @@ export function saveAiSettings(s: AiSettings): void {
   localStorage.setItem(AI_KEY, JSON.stringify(s));
 }
 
-export type ServerKeys = { anthropic: boolean; gemini: boolean };
+export type ServerKeys = { anthropic: boolean; gemini: boolean; passcodeRequired: boolean };
+
+/** API 呼び出し用の共通ヘッダー（パスコード設定時のみ付与） */
+export function aiRequestHeaders(passcode?: string): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const code = passcode ?? loadAiSettings().passcode;
+  if (code) headers["x-viewpoint-passcode"] = code;
+  return headers;
+}
 
 /** サーバー(Vercel環境変数)にキーがあるか問い合わせる。値は返さず真偽のみ。 */
 export async function fetchServerKeys(): Promise<ServerKeys> {
   try {
     const r = await fetch("/api/config");
-    if (r.ok) return (await r.json()) as ServerKeys;
+    if (r.ok) {
+      const data = await r.json();
+      return {
+        anthropic: !!data.anthropic,
+        gemini: !!data.gemini,
+        passcodeRequired: !!data.passcodeRequired,
+      };
+    }
   } catch {
     /* noop */
   }
-  return { anthropic: false, gemini: false };
+  return { anthropic: false, gemini: false, passcodeRequired: false };
 }
 
 /** プロバイダで実際に使えるモデル一覧をキーで取得（失敗時は空配列）。 */
 export async function fetchModels(
   provider: AiSettings["provider"],
-  apiKey: string
+  apiKey: string,
+  passcode?: string
 ): Promise<string[]> {
   try {
     const r = await fetch("/api/models", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: aiRequestHeaders(passcode),
       body: JSON.stringify({ provider, apiKey }),
     });
     if (r.ok) {

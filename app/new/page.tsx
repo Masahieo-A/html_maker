@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { loadAiSettings, fetchServerKeys, saveLesson } from "@/lib/storage";
+import { loadAiSettings, fetchServerKeys, saveLesson, aiRequestHeaders } from "@/lib/storage";
 import AiSettingsPanel from "../components/AiSettings";
 
 export default function NewPage() {
@@ -78,7 +78,7 @@ export default function NewPage() {
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: aiRequestHeaders(),
         body: JSON.stringify({ provider: ai.provider, apiKey: ai.apiKey, model: ai.model, text, image, pdf }),
       });
 
@@ -199,6 +199,7 @@ export default function NewPage() {
             onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
           />
           {imgPreview && (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={imgPreview}
               alt="プレビュー"

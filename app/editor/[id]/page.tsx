@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Block, LessonDoc, Selection } from "@/lib/types";
 import { BLOCK_TYPE_LABELS } from "@/lib/types";
-import { loadAiSettings, fetchServerKeys, loadLesson, saveLesson } from "@/lib/storage";
+import {
+  loadAiSettings,
+  fetchServerKeys,
+  loadLesson,
+  saveLesson,
+  aiRequestHeaders,
+} from "@/lib/storage";
 import { addBlock, makeEmptyBlock, replaceBlock, findBlock } from "@/lib/docOps";
 import { parseLessonDoc } from "@/lib/validate";
 import { exportHtml } from "@/lib/exportHtml";
@@ -49,12 +55,15 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // 自動保存（編集は即時反映）
+  // 自動保存（編集は即時反映）。タイトルが空でも保存する。
   useEffect(() => {
-    if (loaded && doc.blocks.length >= 0 && doc.title !== "") {
-      const t = setTimeout(() => saveLesson(doc), 400);
-      return () => clearTimeout(t);
-    }
+    if (!loaded) return;
+    const t = setTimeout(() => {
+      if (!saveLesson(doc)) {
+        setToast("保存に失敗しました（ブラウザの保存容量不足の可能性）。HTML を書き出して退避してください。");
+      }
+    }, 400);
+    return () => clearTimeout(t);
   }, [doc, loaded]);
 
   // キーボード: Cmd/Ctrl+Z で undo, Shift で redo
@@ -95,13 +104,17 @@ export default function EditorPage() {
     }
     setAiBusy(true);
     try {
-      const scopedInstruction =
-        selection.kind === "text-range"
-          ? `次の選択範囲だけを主な編集対象にしてください。必要最小限の周辺文脈以外は変更しないでください。\n\n選択フィールド: ${selection.field}\n選択範囲: ${selection.start}-${selection.end}\n選択テキスト: ${selection.text}\n\n教師の指示: ${instruction}`
-          : instruction;
+      let scopedInstruction = instruction;
+      if (selection.kind === "text-range") {
+        scopedInstruction = `次の選択範囲だけを主な編集対象にしてください。必要最小限の周辺文脈以外は変更しないでください。\n\n選択フィールド: ${selection.field}\n選択範囲: ${selection.start}-${selection.end}\n選択テキスト: ${selection.text}\n\n教師の指示: ${instruction}`;
+      } else if (selection.kind === "token-range") {
+        scopedInstruction = `次の語のまとまりだけを主な編集対象にしてください。\n\n選択テキスト: ${selection.text}\n対象 token id: ${selection.tokenIds.join(", ")}\n\n教師の指示: ${instruction}`;
+      } else if (selection.kind === "table-cell") {
+        scopedInstruction = `表の ${selection.row + 1} 行目・${selection.col + 1} 列目のセルだけを主な編集対象にしてください。\n\n教師の指示: ${instruction}`;
+      }
       const res = await fetch("/api/edit", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: aiRequestHeaders(),
         body: JSON.stringify({
           provider: ai.provider,
           apiKey: ai.apiKey,
@@ -181,8 +194,7 @@ export default function EditorPage() {
         <button
           className="btn btn--sm"
           onClick={() => {
-            saveLesson(doc);
-            flash("保存しました");
+            flash(saveLesson(doc) ? "保存しました" : "保存に失敗しました（容量不足の可能性）");
           }}
         >
           保存
@@ -277,6 +289,9 @@ export default function EditorPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="html-split">
             <iframe
               title="preview"
+              // sandbox: srcDoc は親と同一オリジンになるため、スクリプト実行を遮断して
+              // localStorage（APIキー等）へのアクセスを防ぐ
+              sandbox=""
               style={{ width: "100%", height: 480, border: "1px solid var(--line)", borderRadius: 10, background: "#fff" }}
               srcDoc={html}
             />

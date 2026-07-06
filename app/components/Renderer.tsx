@@ -5,6 +5,7 @@
 // ============================================================================
 import React from "react";
 import type { Block, Branch, LessonDoc, Selection, TextMark } from "@/lib/types";
+import { sanitizeHtml } from "@/lib/sanitize";
 
 type Props = {
   doc: LessonDoc;
@@ -185,17 +186,26 @@ function BlockView({
       );
     case "sentence":
       return (
-        <p className="r-sentence">
+        <p
+          className={`r-sentence node ${blockSelected ? "node--selected" : ""}`}
+          onClick={selectBlock}
+          data-vp-sentence={block.id}
+        >
           {block.tokens.map((t) => {
             const role = t.role ? doc.rolePalette[t.role] : null;
-            const tselected = isSelected(sel, {
-              kind: "token",
-              blockId: block.id,
-              tokenId: t.id,
-            });
+            const tselected =
+              isSelected(sel, {
+                kind: "token",
+                blockId: block.id,
+                tokenId: t.id,
+              }) ||
+              (sel?.kind === "token-range" &&
+                sel.blockId === block.id &&
+                sel.tokenIds.includes(t.id));
             return (
               <React.Fragment key={t.id}>
                 <span
+                  data-vp-token={t.id}
                   className={`tok ${role ? "" : "tok--plain"} ${
                     tselected ? "tok--selected" : ""
                   }`}
@@ -204,6 +214,7 @@ function BlockView({
                   }
                   title={role?.label}
                   onClick={(e) => {
+                    if (hasActiveTextSelection()) return;
                     e.stopPropagation();
                     onSelect({
                       kind: "token",
@@ -225,7 +236,10 @@ function BlockView({
         blockId: block.id,
       });
       return (
-        <div className="r-tree">
+        <div
+          className={`r-tree node ${blockSelected ? "node--selected" : ""}`}
+          onClick={selectBlock}
+        >
           <div className="r-branch">
             <div
               className={`r-node r-node--root node ${
@@ -261,7 +275,11 @@ function BlockView({
           onClick={selectBlock}
         >
           <div className="r-analysis__head">
-            {block.tag && <span className="r-analysis__tag">{block.tag}</span>}
+            {block.tag && (
+              <span className="r-analysis__tag" {...fieldProps(block.id, "tag")}>
+                {renderMarkedText(block.tag, block.marks, doc, "tag")}
+              </span>
+            )}
             <h3 {...fieldProps(block.id, "title")}>
               {renderMarkedText(block.title, block.marks, doc, "title")}
             </h3>
@@ -288,7 +306,9 @@ function BlockView({
                         style={{ background: role.bg, borderColor: role.color }}
                       />
                     )}
-                    {item.label}
+                    <span {...fieldProps(block.id, `item:${item.id}:label`)}>
+                      {renderMarkedText(item.label, block.marks, doc, `item:${item.id}:label`)}
+                    </span>
                   </dt>
                   <dd {...fieldProps(block.id, `item:${item.id}:value`)}>
                     {renderMarkedText(item.value, block.marks, doc, `item:${item.id}:value`)}
@@ -310,7 +330,11 @@ function BlockView({
           className={`r-table-wrap node ${blockSelected ? "node--selected" : ""}`}
           onClick={selectBlock}
         >
-          {block.title && <h3 className="r-table-title">{block.title}</h3>}
+          {block.title && (
+            <h3 className="r-table-title" {...fieldProps(block.id, "title")}>
+              {renderMarkedText(block.title, block.marks, doc, "title")}
+            </h3>
+          )}
           <div className="r-table-scroll">
             <table className="r-table">
               <thead>
@@ -323,9 +347,28 @@ function BlockView({
               <tbody>
                 {block.rows.map((row, i) => (
                   <tr key={i}>
-                    {block.columns.map((_, j) => (
-                      <td key={j}>{row[j] ?? ""}</td>
-                    ))}
+                    {block.columns.map((_, j) => {
+                      const cellSelected =
+                        sel?.kind === "table-cell" &&
+                        sel.blockId === block.id &&
+                        sel.row === i &&
+                        sel.col === j;
+                      return (
+                        <td
+                          key={j}
+                          className={cellSelected ? "node--selected" : undefined}
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            if (hasActiveTextSelection()) return;
+                            e.stopPropagation();
+                            onSelect({ kind: "table-cell", blockId: block.id, row: i, col: j });
+                          }}
+                          {...fieldProps(block.id, `cell:${i}:${j}`)}
+                        >
+                          {renderMarkedText(row[j] ?? "", block.marks, doc, `cell:${i}:${j}`)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -342,7 +385,9 @@ function BlockView({
           }`}
           onClick={selectBlock}
         >
-          <div className="r-note-label">{block.label}</div>
+          <div className="r-note-label" {...fieldProps(block.id, "label")}>
+            {renderMarkedText(block.label, block.marks, doc, "label")}
+          </div>
           <div {...fieldProps(block.id, "body")}>
             {renderMarkedText(block.body, block.marks, doc, "body")}
           </div>
@@ -371,7 +416,8 @@ function BlockView({
         <div
           className={`r-raw node ${blockSelected ? "node--selected" : ""}`}
           onClick={selectBlock}
-          dangerouslySetInnerHTML={{ __html: block.html }}
+          // XSS対策: エディタ内での実行を防ぐため必ずサニタイズして描画する
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
         />
       );
   }
@@ -392,6 +438,25 @@ export default function Renderer({ doc, selection, onSelect }: Props) {
       range.endContainer.nodeType === Node.ELEMENT_NODE
         ? (range.endContainer as Element)
         : range.endContainer.parentElement;
+    // sentence ブロック内のドラッグ選択 → 語のまとまり（token-range）として扱う
+    const startSentence = startEl?.closest<HTMLElement>("[data-vp-sentence]");
+    const endSentence = endEl?.closest<HTMLElement>("[data-vp-sentence]");
+    if (startSentence && startSentence === endSentence) {
+      const tokenIds: string[] = [];
+      startSentence.querySelectorAll<HTMLElement>("[data-vp-token]").forEach((el) => {
+        if (range.intersectsNode(el) && el.dataset.vpToken) tokenIds.push(el.dataset.vpToken);
+      });
+      if (tokenIds.length > 0) {
+        onSelect({
+          kind: "token-range",
+          blockId: startSentence.dataset.vpSentence ?? "",
+          tokenIds,
+          text: selectedText,
+        });
+        return;
+      }
+    }
+
     const startField = startEl?.closest<HTMLElement>("[data-vp-block][data-vp-field]");
     const endField = endEl?.closest<HTMLElement>("[data-vp-block][data-vp-field]");
     if (!startField || !endField || startField !== endField) return;
