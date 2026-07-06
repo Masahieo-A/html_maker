@@ -29,3 +29,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 教材比較用の一時フォルダ
+/三者比較/
+
+# Claude Code のローカル権限設定（個人環境ごとに異なる）
+.claude/settings.local.json
