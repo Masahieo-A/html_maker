@@ -7,8 +7,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { loadAiSettings, fetchServerKeys, saveLesson, aiRequestHeaders } from "@/lib/storage";
+import { loadAiSettings, fetchServerKeys, loadLesson, saveLesson, aiRequestHeaders } from "@/lib/storage";
 import { parseLessonDoc } from "@/lib/validate";
+import { uid } from "@/lib/ids";
 import {
   extractEmbeddedDocJson,
   importDesignPreserving,
@@ -45,6 +46,18 @@ export default function ImportPage() {
     [html]
   );
 
+  // 埋め込みデータの id が既存教材と衝突するか（改善提案 A-8: 上書き/別名保存の分岐）
+  const embeddedConflict = useMemo(() => {
+    if (!embeddedJson) return false;
+    try {
+      const obj = JSON.parse(embeddedJson);
+      const id = typeof obj?.id === "string" ? obj.id : null;
+      return !!id && !!loadLesson(id);
+    } catch {
+      return false;
+    }
+  }, [embeddedJson]);
+
   const onHtmlFile = (file: File) => {
     setError(null);
     // Google Drive等の「オンラインのみ」ファイルは実体が無く0バイトになりやすい
@@ -68,12 +81,16 @@ export default function ImportPage() {
     reader.readAsText(file);
   };
 
-  /** 埋め込み JSON からの無劣化復元（§2-1） */
-  const restoreEmbedded = () => {
+  /** 埋め込み JSON からの無劣化復元（§2-1）。ID衝突時は上書き/別名保存を選べる（A-8） */
+  const restoreEmbedded = (mode: "overwrite" | "rename" = "overwrite") => {
     if (!embeddedJson) return;
     setError(null);
     try {
       const doc = parseLessonDoc(embeddedJson);
+      if (mode === "rename") {
+        doc.id = uid("lesson");
+        doc.title = doc.title + "（復元）";
+      }
       saveLesson(doc);
       router.push(`/editor/${doc.id}`);
     } catch (e: any) {
@@ -229,9 +246,33 @@ export default function ImportPage() {
             <p className="hint" style={{ marginTop: 0 }}>
               ✅ Viewpoint で書き出した教材データを検出しました。元の教材データをそのまま復元できます。
             </p>
-            <button className="btn btn--primary" onClick={restoreEmbedded} disabled={busy}>
-              無劣化で復元
-            </button>
+            {embeddedConflict ? (
+              <>
+                <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 0 }}>
+                  ⚠️ 同じIDの教材がすでに保存されています。上書きするか、別名（新しいID）で保存するか選んでください。
+                </p>
+                <div className="row">
+                  <button
+                    className="btn btn--primary"
+                    onClick={() => restoreEmbedded("overwrite")}
+                    disabled={busy}
+                  >
+                    上書きする
+                  </button>
+                  <button className="btn" onClick={() => restoreEmbedded("rename")} disabled={busy}>
+                    別名で保存
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                className="btn btn--primary"
+                onClick={() => restoreEmbedded("overwrite")}
+                disabled={busy}
+              >
+                無劣化で復元
+              </button>
+            )}
           </div>
         )}
 
@@ -251,6 +292,14 @@ export default function ImportPage() {
                 元の見た目（CSS）を保ったまま、セクション単位のブロックとして取り込みます。
                 並べ替え・削除・ブロック単位の AI 編集ができます。
               </p>
+              <p className="hint" style={{ marginTop: 4 }}>
+                ✅ 見た目・CSS を完全保持（書き出し時） ／ ⚠️ 編集は生HTMLの直接編集とAI修正のみ。
+                閲覧・再配布・部分修正に向いています。細かな構造編集をしたい場合は「AI で構造化」がおすすめです。
+              </p>
+              <p className="hint" style={{ marginTop: 4 }}>
+                ※ 取り込み直後の編集画面は Viewpoint 標準スタイルで表示されますが、
+                書き出したHTMLでは元のデザインがそのまま再現されます（見た目が消えたわけではありません）。
+              </p>
             </div>
 
             <div className="field">
@@ -260,6 +309,9 @@ export default function ImportPage() {
               <p className="hint" style={{ marginTop: 4 }}>
                 見出し・段落・表・画像などに自動変換します（API キー不要）。
                 デザインは Viewpoint 標準スタイルになります。
+              </p>
+              <p className="hint" style={{ marginTop: 4 }}>
+                ✅ 構造化編集が可能・APIキー不要 ／ ⚠️ 色・枠・下線などの装飾は失われます。
               </p>
             </div>
 
@@ -292,6 +344,9 @@ export default function ImportPage() {
               <p className="hint" style={{ marginTop: 4 }}>
                 AI が内容を変えずに Viewpoint の構造化データへ変換します（API キーが必要）。
                 色分け・表・カードなどの意味を汲み取って対応付けます。
+              </p>
+              <p className="hint" style={{ marginTop: 4 }}>
+                ✅ 構造化編集が可能・意味を汲んだ変換（枠→note など） ／ ⚠️ 細かな色は失われます。所要時間の目安は〜20秒。
               </p>
               {!hasKey && (
                 <p className="hint">

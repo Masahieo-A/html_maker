@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loadAiSettings, fetchServerKeys, saveLesson, aiRequestHeaders } from "@/lib/storage";
+import { normalizeRolePalette } from "@/lib/roleStyle"; // 並行エージェントが作成中
 import AiSettingsPanel from "../components/AiSettings";
 
 export default function NewPage() {
@@ -14,6 +15,8 @@ export default function NewPage() {
   const [pdfName, setPdfName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [blockCount, setBlockCount] = useState(0);
+  const [lastHeading, setLastHeading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasKey, setHasKey] = useState(true);
@@ -69,6 +72,8 @@ export default function NewPage() {
   const generate = async () => {
     setError(null);
     setProgress(0);
+    setBlockCount(0);
+    setLastHeading(null);
     const ai = loadAiSettings();
     if (!ai.apiKey && !serverHasKey) {
       setShowSettings(true);
@@ -108,10 +113,15 @@ export default function NewPage() {
           let evt: any;
           try { evt = JSON.parse(line.slice(6)); } catch { continue; }
           if (evt.progress != null) setProgress(evt.progress);
+          if (evt.blockCount != null) setBlockCount(evt.blockCount);
+          if (evt.lastHeading) setLastHeading(evt.lastHeading);
           if (evt.error) throw new Error(evt.error);
           if (evt.done && evt.doc) {
-            saveLesson(evt.doc);
-            router.push(`/editor/${evt.doc.id}`);
+            const doc = evt.doc;
+            // 安価モデル対策の底上げ（新規要件）: コントラスト不足の色を決定的に修正してから保存する
+            doc.rolePalette = normalizeRolePalette(doc.rolePalette);
+            saveLesson(doc);
+            router.push(`/editor/${doc.id}`);
             break outer;
           }
         }
@@ -221,7 +231,11 @@ export default function NewPage() {
           {busy ? (
             <>
               <span className="spinner" />{" "}
-              {progress > 0 ? `生成中… ${progress.toLocaleString()}文字受信` : "生成中…（まもなく開始）"}
+              {blockCount > 0
+                ? `${blockCount}個目のブロックを生成中…${lastHeading ? `「${lastHeading}」` : ""}`
+                : progress > 0
+                ? `生成中… ${progress.toLocaleString()}文字受信`
+                : "生成中…（まもなく開始）"}
             </>
           ) : (
             "AIで下書き生成"

@@ -3,12 +3,13 @@
 // 選択ノードのプロパティ編集（要件 §5.2）＋ 範囲指定 AI 編集（§5.3）。
 // 編集は常に「新しい doc を返す純粋変換」として onChange で親に渡す（履歴対応）。
 // ============================================================================
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import type {
   AnalysisCardBlock,
   Block,
   LessonDoc,
   NoteBlock,
+  RawHtmlBlock,
   Selection,
   SentenceBlock,
   TableBlock,
@@ -18,15 +19,18 @@ import type {
 import { BLOCK_TYPE_LABELS } from "@/lib/types";
 import {
   addChildBranch,
+  countRoleUsage,
+  duplicateBlock,
   findBlock,
   findBranch,
   moveBlock,
-  removeBlock,
   removeBranch,
+  removeRole,
   replaceBlock,
   updateBlock,
   updateBranch,
 } from "@/lib/docOps";
+import { analyzeDoc, applyQuickFix, type QualityIssue } from "@/lib/docQuality";
 import { uid } from "@/lib/ids";
 
 type Props = {
@@ -36,7 +40,18 @@ type Props = {
   onSelect: (sel: Selection) => void;
   onAiEdit: (instruction: string) => void;
   aiBusy: boolean;
+  /** ブロック削除（confirm() 廃止、呼び出し側でトースト+元に戻すを提供） */
+  onDeleteBlock: (blockId: string) => void;
+  /** 1ブロック→複数ブロックへの分解（rawの段階的構造化・品質チェックのAI修正で使用） */
+  onAiEditMulti: (blockId: string, instruction: string) => Promise<void>;
 };
+
+/** ブロック要素へスクロール（移動・複製・品質チェックからの誘導用。Renderer側の data-block-id と対応） */
+function scrollToBlock(blockId: string) {
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-block-id="${blockId}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+}
 
 function RoleSelect({
   doc,
@@ -70,6 +85,8 @@ export default function Inspector({
   onSelect,
   onAiEdit,
   aiBusy,
+  onDeleteBlock,
+  onAiEditMulti,
 }: Props) {
   const [instruction, setInstruction] = useState("");
 
@@ -80,6 +97,10 @@ export default function Inspector({
         <p className="hint">
           中央のビューで見出し・段落・単語・樹形図の枝・注釈などをクリックすると、ここで編集できます。
         </p>
+        <div className="divider" />
+        <QualityPanel doc={doc} onChange={onChange} onAiEditMulti={onAiEditMulti} />
+        <div className="divider" />
+        <CustomCssEditor doc={doc} onChange={onChange} />
         <div className="divider" />
         <PaletteEditor doc={doc} onChange={onChange} />
       </div>
@@ -131,12 +152,22 @@ export default function Inspector({
       )}
 
       {selection.kind === "text-range" && (
-        <TextRangeEditor doc={doc} block={block} selection={selection} onChange={onChange} />
+        // key: 選択範囲のアイデンティティ（ブロック+フィールド+開始/終了位置）が変わったら
+        // TextRangeEditor を再マウントし、内部state（特に ruby 入力）をリセットする。
+        // リセットしないと、範囲を変えて「重要語句にする」等を押した際に前の範囲用の
+        // ルビ入力が無関係な範囲へ混入してしまう。
+        <TextRangeEditor
+          key={`${block.id}:${selection.field}:${selection.start}:${selection.end}`}
+          doc={doc}
+          block={block}
+          selection={selection}
+          onChange={onChange}
+        />
       )}
 
-      {/* ブロック種別バッジ + 並べ替え/削除（ブロック選択時） */}
+      {/* ブロック種別バッジ + 並べ替え/複製/削除（ブロック選択時） */}
       {selection.kind === "block" && (
-        <BlockToolbar doc={doc} block={block} onChange={onChange} onSelect={onSelect} />
+        <BlockToolbar doc={doc} block={block} onChange={onChange} onSelect={onSelect} onDeleteBlock={onDeleteBlock} />
       )}
 
       {selection.kind === "block" && block.type === "heading" && (
@@ -230,22 +261,7 @@ export default function Inspector({
       )}
 
       {selection.kind === "block" && block.type === "raw" && (
-        <>
-          <span className="insp__chip">生HTML</span>
-          <div className="field">
-            <label>HTML</label>
-            <textarea
-              className="textarea"
-              style={{ minHeight: 140, fontFamily: "monospace", fontSize: 12.5 }}
-              value={block.html}
-              onChange={(e) =>
-                onChange(
-                  updateBlock(doc, block.id, (b) => ({ ...(b as any), html: e.target.value }))
-                )
-              }
-            />
-          </div>
-        </>
+        <RawEditor doc={doc} block={block} onChange={onChange} onAiEditMulti={onAiEditMulti} />
       )}
 
       {selection.kind === "block" && block.type === "analysisCard" && (
@@ -420,8 +436,12 @@ function TextRangeEditor({
     Object.keys(doc.rolePalette)[0] ||
     "";
   const [role, setRole] = useState(defaultRole);
+  const [ruby, setRuby] = useState("");
 
-  const applyMark = (roleKey: string) => {
+  // includeRuby: 明示的に「適用」ボタンを押したときのみ true。「重要語句にする」等の
+  // クイック適用ボタンは ruby を付けない（旧仕様は常に付けていたため、範囲を変えて
+  // クイック適用すると前の範囲用に入力したルビが無関係な範囲に混入していた）。
+  const applyMark = (roleKey: string, opts?: { includeRuby?: boolean }) => {
     const baseDoc = roleKey === "important_phrase" ? ensureImportantRole(doc) : doc;
     const mark: TextMark = {
       id: uid("mark"),
@@ -429,6 +449,7 @@ function TextRangeEditor({
       start: selection.start,
       end: selection.end,
       role: roleKey,
+      ruby: opts?.includeRuby ? ruby.trim() || undefined : undefined,
     };
     // 重なった既存マークは置き換える（重複マークは描画時に黙って消えるため）
     onChange(
@@ -472,11 +493,20 @@ function TextRangeEditor({
         <label>マーカーの意味</label>
         <RoleSelect doc={doc} value={role || null} onChange={(next) => setRole(next ?? "")} />
       </div>
+      <div className="field">
+        <label>ルビ（任意）</label>
+        <input
+          className="input"
+          placeholder="例: きゅうじょ / rescue"
+          value={ruby}
+          onChange={(e) => setRuby(e.target.value)}
+        />
+      </div>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <button
           className="btn btn--primary btn--sm"
           disabled={!role}
-          onClick={() => role && applyMark(role)}
+          onClick={() => role && applyMark(role, { includeRuby: true })}
         >
           適用
         </button>
@@ -498,32 +528,101 @@ function BlockToolbar({
   block,
   onChange,
   onSelect,
+  onDeleteBlock,
 }: {
   doc: LessonDoc;
   block: Block;
   onChange: (d: LessonDoc) => void;
   onSelect: (s: Selection) => void;
+  onDeleteBlock: (blockId: string) => void;
 }) {
+  const moveAndFollow = (dir: -1 | 1) => {
+    onChange(moveBlock(doc, block.id, dir));
+    scrollToBlock(block.id);
+  };
+  const duplicateAndFollow = () => {
+    const idx = doc.blocks.findIndex((b) => b.id === block.id);
+    const next = duplicateBlock(doc, block.id);
+    onChange(next);
+    const clone = idx >= 0 ? next.blocks[idx + 1] : undefined;
+    if (clone) {
+      onSelect({ kind: "block", blockId: clone.id });
+      scrollToBlock(clone.id);
+    }
+  };
   return (
     <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
-      <button className="btn btn--sm" onClick={() => onChange(moveBlock(doc, block.id, -1))}>
+      <button className="btn btn--sm" onClick={() => moveAndFollow(-1)}>
         ↑ 上へ
       </button>
-      <button className="btn btn--sm" onClick={() => onChange(moveBlock(doc, block.id, 1))}>
+      <button className="btn btn--sm" onClick={() => moveAndFollow(1)}>
         ↓ 下へ
       </button>
-      <button
-        className="btn btn--sm btn--danger"
-        onClick={() => {
-          if (confirm("このブロックを削除しますか？")) {
-            onChange(removeBlock(doc, block.id));
-            onSelect(null);
-          }
-        }}
-      >
+      <button className="btn btn--sm" onClick={duplicateAndFollow}>
+        ⧉ 複製
+      </button>
+      <button className="btn btn--sm btn--danger" onClick={() => onDeleteBlock(block.id)}>
         削除
       </button>
     </div>
+  );
+}
+
+function RawEditor({
+  doc,
+  block,
+  onChange,
+  onAiEditMulti,
+}: {
+  doc: LessonDoc;
+  block: RawHtmlBlock;
+  onChange: (d: LessonDoc) => void;
+  onAiEditMulti: (blockId: string, instruction: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const structure = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onAiEditMulti(
+        block.id,
+        "この生HTMLブロックを、内容に応じて見出し・段落・文（sentence）・表・注釈などの適切な種類のブロックに分解・構造化してください。内容や意味を変えないこと。分解不要なら1個のブロックのままでよい。"
+      );
+    } catch (e: any) {
+      setError(e?.message ?? "構造化に失敗しました");
+    } finally {
+      setBusy(false);
+    }
+  }, [block.id, onAiEditMulti]);
+
+  return (
+    <>
+      <span className="insp__chip">生HTML</span>
+      <div className="field">
+        <label>HTML</label>
+        <textarea
+          className="textarea"
+          style={{ minHeight: 140, fontFamily: "monospace", fontSize: 12.5 }}
+          value={block.html}
+          onChange={(e) =>
+            onChange(updateBlock(doc, block.id, (b) => ({ ...(b as any), html: e.target.value })))
+          }
+        />
+      </div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        生HTMLのままだと構造編集・色分けの恩恵が受けられません。AIで段落・表・文ブロック等に分解できます。
+      </p>
+      <button className="btn btn--sm btn--primary" disabled={busy} onClick={structure}>
+        {busy ? <span className="spinner" /> : "✨ AIで構造化（段落・表・文ブロック等に分解）"}
+      </button>
+      {error && (
+        <p className="hint" style={{ color: "var(--danger)", marginTop: 6 }}>
+          エラー: {error}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -966,29 +1065,47 @@ function MarksManager({
         const excerpt = fieldText.slice(m.start, m.end) || `${m.field} ${m.start}-${m.end}`;
         const role = doc.rolePalette[m.role];
         return (
-          <div className="row" key={m.id} style={{ marginBottom: 6, alignItems: "center" }}>
-            <span
-              className="text-mark"
-              style={role ? { color: role.color, background: role.bg } : undefined}
-            >
-              {excerpt.length > 24 ? excerpt.slice(0, 24) + "…" : excerpt}
-            </span>
-            <span className="hint" style={{ flex: 1 }}>
-              {role?.label ?? m.role}
-            </span>
-            <button
-              className="btn btn--sm btn--danger"
-              title="このマーカーを削除"
-              onClick={() =>
+          <div key={m.id} style={{ marginBottom: 8 }}>
+            <div className="row" style={{ alignItems: "center" }}>
+              <span
+                className="text-mark"
+                style={role ? { color: role.color, background: role.bg } : undefined}
+              >
+                {excerpt.length > 24 ? excerpt.slice(0, 24) + "…" : excerpt}
+              </span>
+              <span className="hint" style={{ flex: 1 }}>
+                {role?.label ?? m.role}
+              </span>
+              <button
+                className="btn btn--sm btn--danger"
+                title="このマーカーを削除"
+                onClick={() =>
+                  onChange(
+                    updateBlock(doc, block.id, (b) =>
+                      withBlockMarks(b, getBlockMarks(b).filter((x) => x.id !== m.id))
+                    )
+                  )
+                }
+              >
+                ×
+              </button>
+            </div>
+            <input
+              className="input"
+              style={{ marginTop: 4 }}
+              placeholder="ルビ（任意）"
+              value={m.ruby ?? ""}
+              onChange={(e) =>
                 onChange(
                   updateBlock(doc, block.id, (b) =>
-                    withBlockMarks(b, getBlockMarks(b).filter((x) => x.id !== m.id))
+                    withBlockMarks(
+                      b,
+                      getBlockMarks(b).map((x) => (x.id === m.id ? { ...x, ruby: e.target.value || undefined } : x))
+                    )
                   )
                 )
               }
-            >
-              ×
-            </button>
+            />
           </div>
         );
       })}
@@ -1076,58 +1193,93 @@ function PaletteEditor({
   onChange: (d: LessonDoc) => void;
 }) {
   const [newKey, setNewKey] = useState("");
+  const [confirmingKey, setConfirmingKey] = useState<string | null>(null);
   const entries = Object.entries(doc.rolePalette);
   return (
     <div>
       <div className="insp__title">役割パレット（色 = 意味）</div>
       {entries.length === 0 && <p className="hint">まだ役割がありません。</p>}
-      {entries.map(([key, role]) => (
-        <div className="row" key={key} style={{ marginBottom: 8 }}>
-          <input
-            type="color"
-            value={role.color}
-            title="文字色"
-            onChange={(e) =>
-              onChange({
-                ...doc,
-                rolePalette: {
-                  ...doc.rolePalette,
-                  [key]: { ...role, color: e.target.value },
-                },
-              })
-            }
-            style={{ width: 32, height: 32, padding: 0, border: "none", background: "none" }}
-          />
-          <input
-            type="color"
-            value={role.bg}
-            title="背景色"
-            onChange={(e) =>
-              onChange({
-                ...doc,
-                rolePalette: {
-                  ...doc.rolePalette,
-                  [key]: { ...role, bg: e.target.value },
-                },
-              })
-            }
-            style={{ width: 32, height: 32, padding: 0, border: "none", background: "none" }}
-          />
-          <input
-            className="input"
-            value={role.label}
-            onChange={(e) =>
-              onChange({
-                ...doc,
-                rolePalette: {
-                  ...doc.rolePalette,
-                  [key]: { ...role, label: e.target.value },
-                },
-              })
-            }
-          />
-        </div>
-      ))}
+      {entries.map(([key, role]) => {
+        const usage = countRoleUsage(doc, key);
+        return (
+          <div key={key} style={{ marginBottom: 10 }}>
+            <div className="row">
+              <input
+                type="color"
+                value={role.color}
+                title="文字色"
+                onChange={(e) =>
+                  onChange({
+                    ...doc,
+                    rolePalette: {
+                      ...doc.rolePalette,
+                      [key]: { ...role, color: e.target.value },
+                    },
+                  })
+                }
+                style={{ width: 32, height: 32, padding: 0, border: "none", background: "none" }}
+              />
+              <input
+                type="color"
+                value={role.bg}
+                title="背景色"
+                onChange={(e) =>
+                  onChange({
+                    ...doc,
+                    rolePalette: {
+                      ...doc.rolePalette,
+                      [key]: { ...role, bg: e.target.value },
+                    },
+                  })
+                }
+                style={{ width: 32, height: 32, padding: 0, border: "none", background: "none" }}
+              />
+              <input
+                className="input"
+                value={role.label}
+                onChange={(e) =>
+                  onChange({
+                    ...doc,
+                    rolePalette: {
+                      ...doc.rolePalette,
+                      [key]: { ...role, label: e.target.value },
+                    },
+                  })
+                }
+              />
+              <button
+                className="btn btn--sm btn--danger"
+                title="この役割を削除"
+                onClick={() => setConfirmingKey(key)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="hint" style={{ marginTop: 2 }}>
+              {usage > 0 ? `${usage}箇所で使用中` : "未使用"}
+            </div>
+            {confirmingKey === key && (
+              <div className="row" style={{ marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                <span className="hint">
+                  本当に削除？{usage > 0 ? "使用箇所からも色分けが外れます" : ""}
+                </span>
+                <button
+                  className="btn btn--sm btn--danger"
+                  onClick={() => {
+                    onChange(removeRole(doc, key));
+                    setConfirmingKey(null);
+                  }}
+                >
+                  削除する
+                </button>
+                <button className="btn btn--sm" onClick={() => setConfirmingKey(null)}>
+                  やめる
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
       <div className="row" style={{ marginTop: 6 }}>
         <input
           className="input"
@@ -1153,6 +1305,160 @@ function PaletteEditor({
           追加
         </button>
       </div>
+    </div>
+  );
+}
+
+// --- 教材スタイル（customCss）編集（改善提案 A-1/A-2） -----------------------
+function CustomCssEditor({
+  doc,
+  onChange,
+}: {
+  doc: LessonDoc;
+  onChange: (d: LessonDoc) => void;
+}) {
+  const has = !!(doc.customCss && doc.customCss.trim());
+  const [open, setOpen] = useState(has);
+
+  if (!has && !open) {
+    return (
+      <button className="btn btn--sm" onClick={() => setOpen(true)}>
+        ＋ 教材スタイル(CSS)を追加
+      </button>
+    );
+  }
+
+  return (
+    <div>
+      <div className="insp__title">教材スタイル（CSS）</div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        {has
+          ? "インポート時に取り込まれた元デザインのCSSです。書き出しHTMLにも適用されます。"
+          : "この教材専用のCSSを直接記述できます。書き出しHTMLにも適用されます。"}
+      </p>
+      <textarea
+        className="textarea"
+        style={{ minHeight: 120, fontFamily: "monospace", fontSize: 12.5 }}
+        placeholder="例: .highlight { color: #b91c1c; }"
+        value={doc.customCss ?? ""}
+        onChange={(e) => onChange({ ...doc, customCss: e.target.value || undefined })}
+      />
+      {has && (
+        <button
+          className="btn btn--sm btn--danger"
+          style={{ marginTop: 6 }}
+          onClick={() => onChange({ ...doc, customCss: undefined })}
+        >
+          教材スタイルを削除
+        </button>
+      )}
+    </div>
+  );
+}
+
+// --- 品質チェック（改善提案「デフォルトの質＝プロダクトの質」対応） ----------
+function QualityPanel({
+  doc,
+  onChange,
+  onAiEditMulti,
+}: {
+  doc: LessonDoc;
+  onChange: (d: LessonDoc) => void;
+  onAiEditMulti: (blockId: string, instruction: string) => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [errorFor, setErrorFor] = useState<{ id: string; message: string } | null>(null);
+  // doc が変わるたびに再計算（決定的チェックのため軽量）。バッジ表示のため常時計算する。
+  const issues = useMemo(() => analyzeDoc(doc), [doc]);
+  const warnCount = issues.filter((i) => i.level === "warn").length;
+
+  const handleQuickFix = useCallback(
+    (issueId: string) => onChange(applyQuickFix(doc, issueId)),
+    [doc, onChange]
+  );
+
+  const handleAiFix = useCallback(
+    async (issue: QualityIssue) => {
+      if (issue.fix?.kind !== "ai") return;
+      const targetIds = issue.blockIds ?? [];
+      if (targetIds.length === 0) return;
+      setBusyId(issue.id);
+      setErrorFor(null);
+      try {
+        for (const blockId of targetIds) {
+          await onAiEditMulti(blockId, issue.fix.instruction);
+        }
+      } catch (e: any) {
+        setErrorFor({ id: issue.id, message: e?.message ?? "AI修正に失敗しました" });
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [onAiEditMulti]
+  );
+
+  return (
+    <div>
+      <button className="btn btn--sm" onClick={() => setExpanded((v) => !v)}>
+        ✨ 品質チェック{warnCount > 0 ? `（${warnCount}）` : ""}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 10 }}>
+          {issues.length === 0 && <p className="hint">✓ 問題は見つかりませんでした</p>}
+          {issues.map((issue) => (
+            <div
+              key={issue.id}
+              style={{
+                border: "1px solid var(--line)",
+                borderRadius: 8,
+                padding: 8,
+                marginBottom: 8,
+              }}
+            >
+              <span
+                className="insp__chip"
+                style={
+                  issue.level === "warn"
+                    ? { background: "#fef3c7", color: "#92400e" }
+                    : undefined
+                }
+              >
+                {issue.level === "warn" ? "warn" : "info"}
+              </span>
+              <p className="hint" style={{ margin: "4px 0 8px", color: "var(--fg)" }}>
+                {issue.message}
+              </p>
+              <div className="row" style={{ flexWrap: "wrap" }}>
+                {issue.blockIds && issue.blockIds.length > 0 && (
+                  <button className="btn btn--sm" onClick={() => scrollToBlock(issue.blockIds![0])}>
+                    該当ブロックへ
+                  </button>
+                )}
+                {issue.fix?.kind === "deterministic" && (
+                  <button className="btn btn--sm btn--primary" onClick={() => handleQuickFix(issue.id)}>
+                    {issue.fix.label}
+                  </button>
+                )}
+                {issue.fix?.kind === "ai" && (
+                  <button
+                    className="btn btn--sm btn--primary"
+                    disabled={busyId === issue.id}
+                    onClick={() => handleAiFix(issue)}
+                  >
+                    {busyId === issue.id ? <span className="spinner" /> : issue.fix.label}
+                  </button>
+                )}
+              </div>
+              {errorFor?.id === issue.id && (
+                <p className="hint" style={{ color: "var(--danger)", marginTop: 6 }}>
+                  エラー: {errorFor.message}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

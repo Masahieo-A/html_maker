@@ -105,8 +105,26 @@ function isEmptyElement(el: Element): boolean {
   return !el.querySelector(VISUAL_SELECTOR);
 }
 
+/**
+ * ruby（ふりがな）を「本体(ルビ)」の括弧形式に変換してから textContent を取る共通ヘルパ。
+ * AI構造化モードの挙動（括弧化）と統一するための処理（改善提案 E-1）。
+ * 例: <ruby>解説<rt>かいせつ</rt></ruby> → "解説(かいせつ)"
+ * DOM を破壊しないよう clone した上で変換する。
+ */
 function textOf(el: Element | null): string {
-  return (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+  if (!el) return "";
+  const clone = el.cloneNode(true) as Element;
+  const rubies = Array.from(clone.querySelectorAll("ruby"));
+  for (const ruby of rubies) {
+    const rt = ruby.querySelector("rt");
+    const rtText = (rt?.textContent ?? "").replace(/\s+/g, " ").trim();
+    // rt/rp（ふりがな・括弧記号）を除いた本体テキストのみを残す
+    ruby.querySelectorAll("rt,rp").forEach((n) => n.remove());
+    const baseText = (ruby.textContent ?? "").replace(/\s+/g, " ").trim();
+    const replacement = rtText ? `${baseText}(${rtText})` : baseText;
+    ruby.replaceWith((ruby.ownerDocument ?? document).createTextNode(replacement));
+  }
+  return (clone.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** 直下に空白でないテキストノードを持つか（＝子要素だけに分解すると本文が失われるか） */

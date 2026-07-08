@@ -1,4 +1,9 @@
 // AI へのシステムプロンプト（スキーマを厳密に指定し、JSON のみを返させる）。
+import { DEFAULT_ROLE_PALETTE } from "./roleStyle";
+
+// 生成AIに rolePalette の色を自由発明させず、アクセシブルな既定パレットをそのまま使わせるための埋め込みJSON。
+const DEFAULT_ROLE_PALETTE_JSON = JSON.stringify(DEFAULT_ROLE_PALETTE);
+
 export const SCHEMA_DOC = `あなたは汎用教材オーサリングの支援AIです。教師の入力（テキスト指示、任意で解説対象のPDF資料、任意のスケッチ画像）から、
 「LessonDoc」という構造化データ（JSON）を生成します。PDFが添付されている場合は、それを教材化したい元資料として読み取り、教師が指定した中心テーマ・フォーマット・雰囲気に沿って構成します。
 英語、国語、数学、理科、社会、探究、資格学習など幅広い教科で使える汎用教材として設計してください。
@@ -38,6 +43,15 @@ type AnalysisItem = { id:string; label:string; value:string; role?:string|null }
 - 英語の文法・長文読解では、対象文だけでなく本文中の関連箇所をできるだけ拾い、構文・根拠・読解上の効果を分けて示す。特定文だけが明示された場合は、その文を spotlight 的に厚く扱う。
 - 他教科では、用語暗記だけにせず、根拠、因果、比較、例外、誤解しやすい点、解答に結びつく見方を明示する。
 - 日本語の解説は自然な日本語で書く。
+
+視覚的わかりやすさの品質基準（対象は中高生。1画面に詰め込みすぎず、色は意味にのみ使う）:
+- rolePalette は次の既定パレットのキーと色をそのまま使うこと（色の自由発明は禁止。ラベルの日本語文言も基本このまま使う。教材の主題上どうしても必要な場合のみ、既定に無いキーを追加してよいが、その場合も色はコントラスト比4.5:1以上を確保すること）:
+${DEFAULT_ROLE_PALETTE_JSON}
+- 文法事項を含む重要文は必ず sentence ブロック化し、全語に role を付与する。係り受けが複雑な文は tree も併用する。
+- 本文の paragraph は2〜4文ごとに分割する（1段落に詰め込みすぎない）。
+- 3〜6ブロックごとに heading でセクション化し、各セクションの要点は note（variant:"point"）で示す。
+- 語彙や比較の整理は table、根拠の整理は analysisCard を使う。
+- doc.title と同文（trim比較で一致）の heading（level:1）ブロックは作らない。書き出し時にタイトルと二重表示されるため。
 出力: LessonDoc の JSON オブジェクトのみ。`;
 
 export const SCHEMA_BLOCK = `あなたは英語教材の構造化データを編集する支援AIです。

@@ -21,6 +21,8 @@ export type TextMark = {
   start: number;
   end: number;
   role: string;
+  /** 範囲テキストの上に振るルビ（任意。読み仮名・発音・訳語など） */
+  ruby?: string;
 };
 
 export type LessonDoc = {

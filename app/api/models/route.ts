@@ -29,8 +29,10 @@ export async function POST(req: NextRequest) {
         )}&pageSize=200`
       );
       if (!r.ok) {
+        // 接続テスト（AiSettings）が 401/403/429 を判別できるよう、
+        // 上流の HTTP ステータスをそのままレスポンスのステータスにも反映する。
         const t = await r.text();
-        return NextResponse.json({ models: [], error: t.slice(0, 200) });
+        return NextResponse.json({ models: [], error: t.slice(0, 200) }, { status: r.status });
       }
       const data = await r.json();
       const models: string[] = (data.models ?? [])
@@ -51,14 +53,14 @@ export async function POST(req: NextRequest) {
       });
       if (!r.ok) {
         const t = await r.text();
-        return NextResponse.json({ models: [], error: t.slice(0, 200) });
+        return NextResponse.json({ models: [], error: t.slice(0, 200) }, { status: r.status });
       }
       const data = await r.json();
       const models: string[] = (data.data ?? []).map((m: any) => String(m.id));
       return NextResponse.json({ models: dedupeSort(models) });
     }
   } catch (e: any) {
-    return NextResponse.json({ models: [], error: e?.message ?? "取得失敗" });
+    return NextResponse.json({ models: [], error: e?.message ?? "取得失敗" }, { status: 502 });
   }
 }
 

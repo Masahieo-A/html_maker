@@ -4,11 +4,14 @@ import {
   AiSettings,
   DEFAULT_MODELS,
   ServerKeys,
+  aiRequestHeaders,
   fetchModels,
   fetchServerKeys,
   loadAiSettings,
   saveAiSettings,
 } from "@/lib/storage";
+
+type TestState = "idle" | "testing" | "ok" | "error";
 
 // BYOK 設定パネル（要件 §7：API キーはクライアント保管、モデル選択可）。
 export default function AiSettingsPanel({
@@ -29,6 +32,13 @@ export default function AiSettingsPanel({
   });
   const [models, setModels] = useState<string[]>(DEFAULT_MODELS.anthropic);
   const [loadingModels, setLoadingModels] = useState(false);
+
+  // 接続テスト（改善提案 C-1）
+  const [testState, setTestState] = useState<TestState>("idle");
+  const [testMsg, setTestMsg] = useState("");
+
+  // 保存フィードバック（改善提案 C-2）
+  const [savedToast, setSavedToast] = useState(false);
 
   useEffect(() => {
     const init = loadAiSettings();
@@ -70,7 +80,53 @@ export default function AiSettingsPanel({
       next.model = DEFAULT_MODELS[patch.provider][0];
     }
     setS(next);
+    // 設定を変えたら直前の接続テスト結果は無効化する
+    if (testState !== "idle") {
+      setTestState("idle");
+      setTestMsg("");
+    }
   };
+
+  // 現在の provider/apiKey/model で /api/models を叩き、実際に接続できるか確認する（改善提案 C-1）
+  const runConnectionTest = async () => {
+    setTestState("testing");
+    setTestMsg("");
+    try {
+      const r = await fetch("/api/models", {
+        method: "POST",
+        headers: aiRequestHeaders(s.passcode),
+        body: JSON.stringify({ provider: s.provider, apiKey: s.apiKey }),
+      });
+      let data: any = null;
+      try {
+        data = await r.json();
+      } catch {
+        /* noop */
+      }
+      if (r.ok) {
+        const count = Array.isArray(data?.models) ? data.models.length : 0;
+        setTestState("ok");
+        setTestMsg(`✓ 接続OK（利用可能モデル${count}件）`);
+      } else if (r.status === 401 || r.status === 403) {
+        setTestState("error");
+        setTestMsg(
+          "APIキーが正しくないか権限がありません。コピーの欠け・余分な空白がないか確認してください。"
+        );
+      } else if (r.status === 429) {
+        setTestState("error");
+        setTestMsg("利用上限に達しています。しばらく待ってから再試行してください。");
+      } else {
+        setTestState("error");
+        const detail = (data?.error ?? "").toString().slice(0, 140);
+        setTestMsg(`接続に失敗しました（エラー${r.status}）${detail ? `: ${detail}` : ""}`);
+      }
+    } catch {
+      setTestState("error");
+      setTestMsg("通信エラーが発生しました。ネットワーク接続を確認してください。");
+    }
+  };
+
+  const maskedKey = s.apiKey.length >= 4 ? `••••${s.apiKey.slice(-4)}` : s.apiKey ? "••••" : "";
 
   return (
     <div
@@ -96,9 +152,15 @@ export default function AiSettingsPanel({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 style={{ marginTop: 0, fontSize: 18 }}>AI 設定（BYOK）</h2>
-        <p className="hint" style={{ marginBottom: 16 }}>
+        <p className="hint" style={{ marginBottom: 8 }}>
           API キーはこのブラウザ（localStorage）にのみ保存され、生成時にサーバー経由で
           各社 API に送られます。
+        </p>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          サーバ側キー: Anthropic {serverKeys.anthropic ? "✓" : "✗"} ・ Gemini{" "}
+          {serverKeys.gemini ? "✓" : "✗"}
+          {(serverKeys.anthropic || serverKeys.gemini) &&
+            "（✓のプロバイダはこの画面でキーを入力しなくても生成・編集できます）"}
         </p>
         <div className="field">
           <label>プロバイダ</label>
@@ -139,14 +201,52 @@ export default function AiSettingsPanel({
                 ? "サーバー側に設定済み（空欄でOK）"
                 : s.provider === "anthropic"
                 ? "sk-ant-..."
-                : "AIza..."
+                : "AIza... または AQ....（新形式）"
             }
             value={s.apiKey}
             onChange={(e) => update({ apiKey: e.target.value })}
           />
+          {s.provider === "gemini" && (
+            <p className="hint" style={{ marginTop: 4 }}>
+              Google の API キーは従来の <code>AIza...</code> 形式に加え、新形式の{" "}
+              <code>AQ.</code> から始まるキーにも対応しています。
+            </p>
+          )}
           {serverHasForProvider && (
             <p className="hint" style={{ marginTop: 4 }}>
               ✓ サーバー（Vercel 環境変数）にこのプロバイダのキーが設定済みです。ここは空欄のままで生成・編集できます。
+            </p>
+          )}
+          {maskedKey && (
+            <p className="hint" style={{ marginTop: 4 }}>
+              保存されるキー: {maskedKey}
+            </p>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <button
+              className="btn btn--sm"
+              onClick={runConnectionTest}
+              disabled={testState === "testing"}
+              type="button"
+            >
+              {testState === "testing" ? (
+                <>
+                  <span className="spinner" /> 確認中…
+                </>
+              ) : (
+                "接続テスト"
+              )}
+            </button>
+          </div>
+          {testMsg && (
+            <p
+              className="hint"
+              style={{
+                marginTop: 4,
+                color: testState === "error" ? "var(--danger)" : undefined,
+              }}
+            >
+              {testMsg}
             </p>
           )}
         </div>
@@ -165,7 +265,12 @@ export default function AiSettingsPanel({
             </p>
           </div>
         )}
-        <div className="row" style={{ justifyContent: "flex-end", marginTop: 8 }}>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 8, alignItems: "center" }}>
+          {savedToast && (
+            <span className="hint" style={{ color: "#16a34a" }}>
+              ✓ 保存しました
+            </span>
+          )}
           <button className="btn" onClick={onClose}>
             閉じる
           </button>
@@ -173,7 +278,11 @@ export default function AiSettingsPanel({
             className="btn btn--primary"
             onClick={() => {
               saveAiSettings(s);
-              onClose();
+              setSavedToast(true);
+              setTimeout(() => {
+                setSavedToast(false);
+                onClose();
+              }, 700);
             }}
           >
             保存

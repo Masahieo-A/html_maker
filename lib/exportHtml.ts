@@ -4,6 +4,8 @@
 // ============================================================================
 import type { Block, Branch, LessonDoc, Role, TextMark } from "./types";
 import { sanitizeHtml, safeCssColor } from "./sanitize";
+import { roleDecoration, decorationCssText, type RoleDecoration } from "./roleStyle";
+import { isDuplicateTitleHeading } from "./docQuality";
 
 export function esc(s: string): string {
   return s
@@ -14,10 +16,16 @@ export function esc(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function roleStyle(role: Role): string {
+function roleStyle(role: Role, decoration?: RoleDecoration): string {
   const color = safeCssColor(role.color, "#334155");
   const bg = safeCssColor(role.bg, "#e2e8f0");
-  return `color:${color};background:${bg};`;
+  const deco = decoration ? decorationCssText(decoration) : "";
+  return `color:${color};background:${bg};${deco}`;
+}
+
+/** マーク対象テキストを <ruby> で包む（ruby 未指定ならそのままエスケープのみ） */
+function rubyOrPlain(rawValue: string, ruby: string | undefined): string {
+  return ruby ? `<ruby>${esc(rawValue)}<rt>${esc(ruby)}</rt></ruby>` : esc(rawValue);
 }
 
 function markedTextHtml(
@@ -37,9 +45,12 @@ function markedTextHtml(
     if (mark.start < cursor) continue;
     if (cursor < mark.start) html += esc(text.slice(cursor, mark.start));
     const role = doc.rolePalette[mark.role];
-    const value = esc(text.slice(mark.start, mark.end));
+    const value = rubyOrPlain(text.slice(mark.start, mark.end), mark.ruby);
     html += role
-      ? `<span class="vp-text-mark" style="${roleStyle(role)}" title="${esc(role.label)}">${value}</span>`
+      ? `<span class="vp-text-mark" style="${roleStyle(
+          role,
+          roleDecoration(mark.role, doc.rolePalette)
+        )}" title="${esc(role.label)}">${value}</span>`
       : `<span class="vp-text-mark">${value}</span>`;
     cursor = mark.end;
   }
@@ -49,7 +60,10 @@ function markedTextHtml(
 
 function branchHtml(doc: LessonDoc, b: Branch): string {
   const role = doc.rolePalette[b.role];
-  const chip = role
+  // role 削除後は role が空文字になり得る（docOps.removeRole）。空チップは描画しない。
+  const chip = !b.role
+    ? ""
+    : role
     ? `<span class="vp-role" style="${roleStyle(role)}">${esc(role.label)}</span>`
     : `<span class="vp-role vp-role--plain">${esc(b.role)}</span>`;
   const children =
@@ -76,9 +90,10 @@ function blockHtml(doc: LessonDoc, block: Block): string {
       const tokens = block.tokens
         .map((t) => {
           const role = t.role ? doc.rolePalette[t.role] : null;
-          if (role) {
+          if (role && t.role) {
             return `<span class="vp-tok" style="${roleStyle(
-              role
+              role,
+              roleDecoration(t.role, doc.rolePalette)
             )}" title="${esc(role.label)}">${esc(t.text)}</span>`;
           }
           return `<span class="vp-tok vp-tok--plain">${esc(t.text)}</span>`;
@@ -156,15 +171,20 @@ function blockHtml(doc: LessonDoc, block: Block): string {
 }
 
 function legendHtml(doc: LessonDoc): string {
-  const entries = Object.values(doc.rolePalette);
+  const entries = Object.entries(doc.rolePalette);
   if (entries.length === 0) return "";
   const items = entries
-    .map(
-      (r) =>
-        `<span class="vp-legend-item"><span class="vp-swatch" style="${roleStyle(
-          r
-        )}"></span>${esc(r.label)}</span>`
-    )
+    .map(([key, r]) => {
+      const deco = roleDecoration(key, doc.rolePalette);
+      // 凡例も色＋下線パターン＋ラベルの三重表示にする（モノクロ印刷でも判別できるように）
+      return `<span class="vp-legend-item"><span class="vp-swatch" style="background:${safeCssColor(
+        r.bg,
+        "#e2e8f0"
+      )};"></span><span class="vp-legend-label" style="color:${safeCssColor(
+        r.color,
+        "#334155"
+      )};${decorationCssText(deco)}">${esc(r.label)}</span></span>`;
+    })
     .join("");
   return `<div class="vp-legend">${items}</div>`;
 }
@@ -222,13 +242,19 @@ body{margin:0;background:#f1f5f9;color:var(--vp-fg);font-family:-apple-system,Bl
 .vp-legend{display:flex;flex-wrap:wrap;gap:.6em 1em;margin:0 0 18px;padding:10px 12px;background:#f8fafc;border-radius:8px;font-size:.82rem;}
 .vp-legend-item{display:inline-flex;align-items:center;gap:.4em;}
 .vp-swatch{width:14px;height:14px;border-radius:4px;display:inline-block;}
+.vp-legend-label{padding-bottom:.15em;font-weight:600;}
+.vp-tok rt,.vp-text-mark rt{font-size:.6em;user-select:none;}
 .vp-foot{margin-top:40px;color:var(--vp-muted);font-size:.75rem;text-align:center;}
 @media print{body{background:#fff;}.vp-doc{box-shadow:none;max-width:none;}.vp-tree{overflow:visible;}}
 @media(max-width:480px){.vp-doc{padding:18px 14px 48px;}.vp-sentence{font-size:1.05rem;}}
 `;
 
 export function exportHtml(doc: LessonDoc): string {
-  const body = doc.blocks.map((b) => blockHtml(doc, b)).join("\n");
+  // タイトル二重表示の抑制: 先頭ブロックが level1 見出しで doc.title と同文なら、その表示だけ省く。
+  // 判定は docQuality.isDuplicateTitleHeading と共用（同一式の二重実装を防ぐ）。
+  // embedded（保存形式）は無劣化復元のため doc.blocks をそのまま使う＝ここでは削らない。
+  const visibleBlocks = isDuplicateTitleHeading(doc) ? doc.blocks.slice(1) : doc.blocks;
+  const body = visibleBlocks.map((b) => blockHtml(doc, b)).join("\n");
   // 元データを埋め込む: 書き出しHTMLが「配布物」であると同時に「保存形式」になり、
   // インポートページから無劣化で復元できる（</script> 対策で < をエスケープ）。
   const embedded = JSON.stringify(doc).replace(/</g, "\\u003c");

@@ -32,6 +32,8 @@ function coerceMarks(raw: any): TextMark[] | undefined {
       start: Number(m?.start),
       end: Number(m?.end),
       role: asString(m?.role),
+      // ruby は任意フィールド。未指定・空文字は undefined にして後方互換を保つ。
+      ruby: m?.ruby == null ? undefined : asString(m.ruby) || undefined,
     }))
     .filter((m: TextMark) => m.field && m.role && Number.isFinite(m.start) && Number.isFinite(m.end) && m.end > m.start);
   return marks.length ? marks : undefined;

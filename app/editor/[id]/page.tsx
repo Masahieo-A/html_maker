@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Block, LessonDoc, Selection } from "@/lib/types";
@@ -11,7 +11,14 @@ import {
   saveLesson,
   aiRequestHeaders,
 } from "@/lib/storage";
-import { addBlock, makeEmptyBlock, replaceBlock, findBlock } from "@/lib/docOps";
+import {
+  addBlock,
+  makeEmptyBlock,
+  replaceBlock,
+  replaceBlockWithMany,
+  removeBlock,
+  findBlock,
+} from "@/lib/docOps";
 import { parseLessonDoc } from "@/lib/validate";
 import { exportHtml } from "@/lib/exportHtml";
 import { useHistory } from "../../components/useHistory";
@@ -34,14 +41,33 @@ export default function EditorPage() {
     blocks: [],
   });
   const doc = hist.present;
+  // stale closure対策: 非同期ハンドラ（onAiEdit/onAiEditMulti）は render 時の doc を
+  // クロージャで捕まえるため、複数回await（Inspector.QualityPanel.handleAiFix 等）すると
+  // 2回目以降が古い doc に対して commit してしまい、直前の修正が黙って巻き戻る。
+  // そのため await の後で doc を読む箇所は必ずこの ref 経由にする。
+  const docRef = useRef(doc);
+  docRef.current = doc;
 
   const [selection, setSelection] = useState<Selection>(null);
   const [tab, setTab] = useState<Tab>("view");
-  const [toast, setToast] = useState<string | null>(null);
+  type ToastState = { id: number; msg: string; actionLabel?: string; onAction?: () => void };
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastIdRef = useRef(0);
   const [aiBusy, setAiBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [jsonDraft, setJsonDraft] = useState("");
   const [serverHasKey, setServerHasKey] = useState(false);
+
+  // トースト表示（改善提案 D-2: 削除確認ダイアログ廃止→トースト+元に戻す、で action 付きに対応）
+  const flash = (
+    msg: string,
+    opts?: { actionLabel?: string; onAction?: () => void; duration?: number }
+  ) => {
+    const id = ++toastIdRef.current;
+    setToast({ id, msg, actionLabel: opts?.actionLabel, onAction: opts?.onAction });
+    const duration = opts?.duration ?? 1800;
+    setTimeout(() => setToast((t) => (t?.id === id ? null : t)), duration);
+  };
 
   useEffect(() => {
     fetchServerKeys().then((sk) => setServerHasKey(sk.anthropic || sk.gemini));
@@ -60,7 +86,7 @@ export default function EditorPage() {
     if (!loaded) return;
     const t = setTimeout(() => {
       if (!saveLesson(doc)) {
-        setToast("保存に失敗しました（ブラウザの保存容量不足の可能性）。HTML を書き出して退避してください。");
+        flash("保存に失敗しました（ブラウザの保存容量不足の可能性）。HTML を書き出して退避してください。");
       }
     }, 400);
     return () => clearTimeout(t);
@@ -79,11 +105,6 @@ export default function EditorPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [hist]);
 
-  const flash = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 1800);
-  };
-
   const html = useMemo(() => (loaded ? exportHtml(doc) : ""), [doc, loaded]);
 
   const onAddBlock = (type: Block["type"]) => {
@@ -95,7 +116,7 @@ export default function EditorPage() {
 
   const onAiEdit = async (instruction: string) => {
     if (!selection) return;
-    const block = findBlock(doc, selection.blockId);
+    const block = findBlock(docRef.current, selection.blockId);
     if (!block) return;
     const ai = loadAiSettings();
     if (!ai.apiKey && !serverHasKey) {
@@ -120,7 +141,7 @@ export default function EditorPage() {
           apiKey: ai.apiKey,
           model: ai.model,
           block,
-          palette: doc.rolePalette,
+          palette: docRef.current.rolePalette,
           instruction: scopedInstruction,
         }),
       });
@@ -128,13 +149,51 @@ export default function EditorPage() {
       if (!res.ok) throw new Error(data.error ?? "AI 編集に失敗しました");
       // id を保持して差し替え
       const updated: Block = { ...data.block, id: block.id };
-      hist.commit(replaceBlock(doc, block.id, updated));
+      hist.commit(replaceBlock(docRef.current, block.id, updated));
       flash("AI で更新しました");
     } catch (e: any) {
       flash("エラー: " + e.message);
     } finally {
       setAiBusy(false);
     }
+  };
+
+  // ブロック削除（改善提案 D-2）: confirm() は使わず、即削除してトースト+「元に戻す」で undo を促す
+  const onDeleteBlock = (blockId: string) => {
+    hist.commit(removeBlock(doc, blockId));
+    setSelection(null);
+    flash("ブロックを削除しました", { actionLabel: "元に戻す", onAction: () => hist.undo(), duration: 5000 });
+  };
+
+  // 1ブロック→複数ブロックへのAI分解（rawの段階的構造化・品質チェックのAI修正で使用）
+  // QualityPanel.handleAiFix は複数ブロックに対して連続で await するため、
+  // render時の doc をクロージャで捕まえると2回目以降が古い doc に commit し、
+  // 直前の修正が黙って巻き戻る。読み出しは必ず docRef.current 経由にする。
+  const onAiEditMulti = async (blockId: string, instruction: string) => {
+    const block = findBlock(docRef.current, blockId);
+    if (!block) throw new Error("ブロックが見つかりません");
+    const ai = loadAiSettings();
+    if (!ai.apiKey && !serverHasKey) {
+      setShowSettings(true);
+      throw new Error("AI設定（APIキー）が必要です");
+    }
+    const res = await fetch("/api/edit", {
+      method: "POST",
+      headers: aiRequestHeaders(),
+      body: JSON.stringify({
+        provider: ai.provider,
+        apiKey: ai.apiKey,
+        model: ai.model,
+        block,
+        palette: docRef.current.rolePalette,
+        instruction,
+        allowMultiple: true,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "AI 編集に失敗しました");
+    hist.commit(replaceBlockWithMany(docRef.current, blockId, data.blocks));
+    flash("AI で分解しました");
   };
 
   const downloadHtml = () => {
@@ -240,7 +299,7 @@ export default function EditorPage() {
       {tab === "view" && (
         <div className="editor">
           <div className="editor__main">
-            <Renderer doc={doc} selection={selection} onSelect={setSelection} />
+            <Renderer doc={doc} selection={selection} onSelect={setSelection} onChange={hist.commit} />
             {doc.blocks.length === 0 && (
               <p className="muted">上の「追加」からブロックを足してください。</p>
             )}
@@ -253,6 +312,8 @@ export default function EditorPage() {
               onSelect={setSelection}
               onAiEdit={onAiEdit}
               aiBusy={aiBusy}
+              onDeleteBlock={onDeleteBlock}
+              onAiEditMulti={onAiEditMulti}
             />
           </aside>
         </div>
@@ -302,7 +363,22 @@ export default function EditorPage() {
         </main>
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          <span>{toast.msg}</span>
+          {toast.actionLabel && (
+            <button
+              className="toast__action"
+              onClick={() => {
+                toast.onAction?.();
+                setToast(null);
+              }}
+            >
+              {toast.actionLabel}
+            </button>
+          )}
+        </div>
+      )}
       {showSettings && <AiSettingsPanel onClose={() => setShowSettings(false)} />}
     </>
   );
