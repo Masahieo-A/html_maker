@@ -45,6 +45,16 @@ async function callAnthropic({ apiKey, model, system, user, image, pdf }: CallIn
   return text;
 }
 
+// Gemini 2.5 以降は「思考トークン」も maxOutputTokens から消費するため、上限が小さいと
+// 思考だけで枯渇して実出力が途中で切れる（blocks が空になる等）。2.5/3 系は 65,536 まで
+// 対応しているので余裕を持たせ、旧モデル（2.0 系の上限 8,192）はそのまま。
+function geminiMaxOutputTokens(model: string): number {
+  return /gemini-(2\.5|[3-9])/.test(model) ? 32768 : 8192;
+}
+
+const GEMINI_TRUNCATED_MSG =
+  "出力がトークン上限（MAX_TOKENS）で途切れました。もう一度生成するか、指示・範囲を分割してください。";
+
 async function callGemini({ apiKey, model, system, user, image, pdf }: CallInput): Promise<string> {
   const parts: any[] = [];
   if (pdf) parts.push({ inline_data: { mime_type: "application/pdf", data: pdf.data } });
@@ -57,12 +67,13 @@ async function callGemini({ apiKey, model, system, user, image, pdf }: CallInput
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 8000, responseMimeType: "application/json" },
+      generationConfig: { temperature: 0.2, maxOutputTokens: geminiMaxOutputTokens(model), responseMimeType: "application/json" },
     }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error(`Gemini API ${res.status}: ${t.slice(0, 400)}`); }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+  if (data?.candidates?.[0]?.finishReason === "MAX_TOKENS") throw new Error(`Gemini: ${GEMINI_TRUNCATED_MSG}`);
   if (!text) throw new Error("Gemini: 空のレスポンス");
   return text;
 }
@@ -129,7 +140,7 @@ async function* streamGemini({ apiKey, model, system, user, image, pdf }: CallIn
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 8000, responseMimeType: "application/json" },
+      generationConfig: { temperature: 0.2, maxOutputTokens: geminiMaxOutputTokens(model), responseMimeType: "application/json" },
     }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error(`Gemini API ${res.status}: ${t.slice(0, 400)}`); }
@@ -137,6 +148,7 @@ async function* streamGemini({ apiKey, model, system, user, image, pdf }: CallIn
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let finishReason = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -148,6 +160,7 @@ async function* streamGemini({ apiKey, model, system, user, image, pdf }: CallIn
         if (!line.startsWith("data: ")) continue;
         try {
           const evt = JSON.parse(line.slice(6));
+          if (evt?.candidates?.[0]?.finishReason) finishReason = evt.candidates[0].finishReason;
           const text = evt?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
           if (text) yield text;
         } catch { /* malformed line, skip */ }
@@ -156,4 +169,7 @@ async function* streamGemini({ apiKey, model, system, user, image, pdf }: CallIn
   } finally {
     reader.releaseLock();
   }
+  // 途中で切れた出力を黙って修復にかけると「blocks が空の教材」など不可解な結果になる。
+  // 明確なエラーとして伝え、ユーザーに再生成を促す。
+  if (finishReason === "MAX_TOKENS") throw new Error(`Gemini: ${GEMINI_TRUNCATED_MSG}`);
 }
